@@ -301,6 +301,157 @@ export interface HealthCheckResponse {
   timestamp: string;
 }
 
+// Enhanced health monitoring types
+export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
+
+export interface ServiceHealthDetail {
+  status: HealthStatus;
+  responseTime: number;
+  lastError?: string;
+  lastChecked: string;
+}
+
+export interface FirestoreHealth extends ServiceHealthDetail {
+  collections: {
+    conversations: boolean;
+    messages: boolean;
+    jobs: boolean;
+    repositories: boolean;
+    files: boolean;
+  };
+  operations: {
+    read: boolean;
+    write: boolean;
+  };
+}
+
+export interface QdrantHealth extends ServiceHealthDetail {
+  collection: {
+    exists: boolean;
+    vectorCount: number;
+    indexedVectors: number;
+  };
+  operations: {
+    search: boolean;
+    upsert: boolean;
+  };
+}
+
+export interface OpenAIHealth extends ServiceHealthDetail {
+  embedding: {
+    available: boolean;
+    responseTime: number;
+  };
+  chat: {
+    available: boolean;
+    responseTime: number;
+  };
+  quotaStatus: 'normal' | 'limited' | 'exceeded';
+}
+
+export interface LangChainHealth extends ServiceHealthDetail {
+  vectorStore: boolean;
+  chains: {
+    search: boolean;
+    conversational: boolean;
+    summary: boolean;
+  };
+  models: {
+    embedding: boolean;
+    chat: boolean;
+  };
+}
+
+export interface DetailedHealthResponse {
+  status: HealthStatus;
+  services: {
+    firestore: FirestoreHealth;
+    qdrant: QdrantHealth;
+    openai: OpenAIHealth;
+    langchain: LangChainHealth;
+  };
+  system: {
+    memory: {
+      used: number;
+      total: number;
+      percentage: number;
+    };
+    uptime: number;
+    nodeVersion: string;
+    version: string;
+  };
+  timestamp: string;
+}
+
+export interface ConversationMetrics {
+  activeSessions: number;
+  totalMessages: number;
+  averageSessionLength: number;
+  summaryGeneration: {
+    successRate: number;
+    averageTime: number;
+    failedInLast24h: number;
+  };
+  memoryUsage: {
+    totalTokens: number;
+    averageTokensPerSession: number;
+    tokenLimitExceeded: number;
+  };
+  languages: {
+    [key in Language]: number;
+  };
+}
+
+export interface RAGMetrics {
+  searchQueries: {
+    total: number;
+    successRate: number;
+    averageResponseTime: number;
+    noEvidenceRate: number;
+  };
+  documentRetrieval: {
+    averageDocuments: number;
+    averageScore: number;
+    lowScoreQueries: number;
+  };
+  langchainPerformance: {
+    chainExecutionTime: number;
+    errorRate: number;
+    cacheHitRate?: number;
+  };
+}
+
+export interface SyncMetrics {
+  recentJobs: {
+    completed: number;
+    failed: number;
+    running: number;
+    pending: number;
+  };
+  performance: {
+    averageSyncTime: number;
+    filesPerSecond: number;
+    lastSuccessfulSync: string | null;
+  };
+  dataIntegrity: {
+    totalFiles: number;
+    totalChunks: number;
+    orphanedChunks: number;
+  };
+}
+
+export interface SystemMetrics {
+  conversation: ConversationMetrics;
+  rag: RAGMetrics;
+  sync: SyncMetrics;
+  performance: {
+    averageResponseTime: number;
+    requestsPerMinute: number;
+    errorRate: number;
+  };
+  timestamp: string;
+}
+
 // Configuration Types
 
 // Service configuration

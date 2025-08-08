@@ -51,9 +51,11 @@ class App {
   }
 
   private setupRoutes(): void {
-    // Health check endpoint
+    // Phase 5: Enhanced health check endpoints
     this.app.get('/healthz', this.healthController.healthCheck.bind(this.healthController));
     this.app.get('/health', this.healthController.healthCheck.bind(this.healthController));
+    this.app.get('/health/detailed', this.healthController.detailedHealth.bind(this.healthController));
+    this.app.get('/health/metrics', this.healthController.systemMetrics.bind(this.healthController));
 
     // Phase 3: Telegram webhook endpoint
     this.app.post('/telegram/webhook', this.telegramController.handleWebhook.bind(this.telegramController));
