@@ -370,4 +370,247 @@ export class GitHubService {
   generateContentHash(content: string): string {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
+
+  /**
+   * Phase 4: 데이터 동기화 메서드들
+   */
+
+  /**
+   * 단일 파일 변경 사항 처리
+   * 파일을 다운로드하고, 청킹하고, 임베딩하여 Qdrant에 저장
+   */
+  async processFileChange(filePath: string, commitSha: string): Promise<void> {
+    try {
+      const services = require('./index').getServices();
+      
+      console.log(`Processing file change: ${filePath}`);
+
+      // 1. 파일 내용 가져오기
+      const content = await this.getFileContent(filePath, commitSha);
+      
+      // 2. 파일 메타데이터 생성
+      const metadata = this.extractFileMetadata(filePath, content);
+      const contentHash = this.generateContentHash(content);
+      const fileId = this.generateFileId(this.getRepositoryId(), filePath);
+      const fileUrl = this.generateFileUrl(filePath, commitSha);
+
+      // 3. Firestore에 파일 메타데이터 저장
+      await services.firestore.saveFileMetadata({
+        fileId,
+        repoId: this.getRepositoryId(),
+        filePath,
+        commit: commitSha,
+        contentHash,
+        title: metadata.title,
+        lang: metadata.lang,
+        url: fileUrl,
+        processedAt: new Date()
+      });
+
+      // 4. 텍스트 청킹
+      const chunks = services.openai.chunkText(content, filePath);
+      
+      console.log(`Created ${chunks.length} chunks for ${filePath}`);
+
+      // 5. 각 청크에 대해 임베딩 생성 및 저장
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const chunkId = `${fileId}_${i}`;
+
+        // 임베딩 생성
+        const embedding = await services.openai.generateEmbedding(chunk.text);
+
+        // Qdrant에 저장
+        await services.qdrant.upsertPoint(chunkId, embedding, {
+          repoId: this.getRepositoryId(),
+          fileId,
+          filePath,
+          commit: commitSha,
+          seq: i,
+          lang: metadata.lang,
+          hash: contentHash,
+          title: metadata.title || chunk.title,
+          url: fileUrl
+        });
+
+        // Firestore에 청크 메타데이터 저장
+        await services.firestore.saveChunkMetadata({
+          chunkId,
+          fileId,
+          seq: i,
+          text: chunk.text,
+          title: chunk.title,
+          startChar: chunk.startChar,
+          endChar: chunk.endChar,
+          hash: this.generateContentHash(chunk.text)
+        });
+      }
+
+      console.log(`Successfully processed file: ${filePath} (${chunks.length} chunks)`);
+
+    } catch (error) {
+      console.error(`Failed to process file ${filePath}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 파일 삭제 처리
+   * Qdrant와 Firestore에서 해당 파일의 모든 데이터 삭제
+   */
+  async deleteFileFromIndex(filePath: string): Promise<void> {
+    try {
+      const services = require('./index').getServices();
+      const fileId = this.generateFileId(this.getRepositoryId(), filePath);
+      
+      console.log(`Deleting file from index: ${filePath}`);
+
+      // 1. Qdrant에서 해당 파일의 모든 포인트 삭제
+      await services.qdrant.deletePointsByFilter({
+        must: [
+          {
+            key: 'fileId',
+            match: { value: fileId }
+          }
+        ]
+      });
+
+      // 2. Firestore에서 청크 메타데이터 삭제
+      await services.firestore.deleteChunksByFileId(fileId);
+
+      // 3. Firestore에서 파일 메타데이터 삭제
+      await services.firestore.deleteFileMetadata(fileId);
+
+      console.log(`Successfully deleted file from index: ${filePath}`);
+
+    } catch (error) {
+      console.error(`Failed to delete file ${filePath} from index:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 전체 레포지토리 동기화
+   * 모든 마크다운 파일을 스캔하고 처리
+   */
+  async performFullSync(branch: string = 'main', force: boolean = false): Promise<void> {
+    try {
+      const services = require('./index').getServices();
+      
+      console.log(`Starting full sync for branch: ${branch}`);
+
+      // 1. 최신 커밋 정보 가져오기
+      const latestCommit = await this.getLatestCommit(branch);
+      const commitSha = latestCommit.sha;
+
+      // 2. 모든 마크다운 파일 목록 가져오기
+      const allFiles = await this.listMarkdownFiles('', commitSha);
+      console.log(`Found ${allFiles.length} markdown files to process`);
+
+      // 3. 기존 처리된 파일들과 비교 (force가 아닌 경우)
+      let filesToProcess = allFiles;
+      
+      if (!force) {
+        const processedFiles = await services.firestore.getProcessedFiles(
+          this.getRepositoryId(), 
+          commitSha
+        );
+        
+        filesToProcess = allFiles.filter(filePath => {
+          const fileId = this.generateFileId(this.getRepositoryId(), filePath);
+          return !processedFiles.has(fileId);
+        });
+        
+        console.log(`${filesToProcess.length} files need processing (${allFiles.length - filesToProcess.length} already processed)`);
+      }
+
+      // 4. 파일들을 배치로 처리 (동시성 제한)
+      const batchSize = 5;
+      let processed = 0;
+
+      for (let i = 0; i < filesToProcess.length; i += batchSize) {
+        const batch = filesToProcess.slice(i, i + batchSize);
+        
+        // 배치 내 파일들을 병렬 처리
+        const batchPromises = batch.map(async (filePath) => {
+          try {
+            await this.processFileChange(filePath, commitSha);
+            processed++;
+          } catch (error) {
+            console.error(`Failed to process ${filePath}:`, error);
+          }
+        });
+
+        await Promise.all(batchPromises);
+        
+        console.log(`Processed batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(filesToProcess.length / batchSize)} (${processed}/${filesToProcess.length} files)`);
+      }
+
+      // 5. 레포지토리 메타데이터 업데이트
+      await services.firestore.updateRepositoryMetadata({
+        repoId: this.getRepositoryId(),
+        lastSyncCommit: commitSha,
+        lastSyncAt: new Date(),
+        fileCount: allFiles.length,
+        processedCount: processed
+      });
+
+      console.log(`Full sync completed: ${processed}/${filesToProcess.length} files processed`);
+
+    } catch (error) {
+      console.error('Full sync failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 레포지토리 상태 확인
+   * 현재 인덱싱 상태와 최신 커밋 비교
+   */
+  async getRepositoryStatus(): Promise<{
+    repoId: string;
+    latestCommit: string;
+    lastSyncCommit?: string;
+    lastSyncAt?: Date;
+    totalFiles: number;
+    indexedFiles: number;
+    needsSync: boolean;
+  }> {
+    try {
+      const services = require('./index').getServices();
+      
+      // 최신 커밋 정보
+      const latestCommit = await this.getLatestCommit();
+      const latestCommitSha = latestCommit.sha;
+
+      // 레포지토리 메타데이터 조회
+      const repoMetadata = await services.firestore.getRepositoryMetadata(this.getRepositoryId());
+
+      // 전체 마크다운 파일 수
+      const allFiles = await this.listMarkdownFiles('', latestCommitSha);
+      const totalFiles = allFiles.length;
+
+      // 인덱싱된 파일 수 
+      const indexedFiles = await services.firestore.getIndexedFileCount(this.getRepositoryId());
+
+      // 동기화 필요 여부
+      const needsSync = !repoMetadata?.lastSyncCommit || 
+                       repoMetadata.lastSyncCommit !== latestCommitSha ||
+                       indexedFiles < totalFiles;
+
+      return {
+        repoId: this.getRepositoryId(),
+        latestCommit: latestCommitSha,
+        lastSyncCommit: repoMetadata?.lastSyncCommit,
+        lastSyncAt: repoMetadata?.lastSyncAt,
+        totalFiles,
+        indexedFiles,
+        needsSync
+      };
+
+    } catch (error) {
+      console.error('Failed to get repository status:', error);
+      throw error;
+    }
+  }
 }

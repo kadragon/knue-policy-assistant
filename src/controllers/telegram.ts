@@ -137,7 +137,7 @@ export class TelegramController {
 
   /**
    * 일반 메시지 처리
-   * Phase 4에서 RAG 검색 연동 예정
+   * Phase 4: RAG 검색 시스템과 연동
    */
   private async handleMessage(context: TelegramContext): Promise<void> {
     const services = getServices();
@@ -146,23 +146,22 @@ export class TelegramController {
     try {
       // 세션 초기화 및 언어 자동 감지
       const conversation = await services.conversation.initializeSession(chatId);
-      await services.conversation.detectAndUpdateLanguage(chatId, text);
+      const detectedLang = await services.conversation.detectAndUpdateLanguage(chatId, text);
       
       // 사용자 메시지 저장
       await services.conversation.saveMessage(chatId, 'user', text);
 
-      // Phase 4에서 RAG 검색 및 응답 생성 예정
-      // 현재는 기본 응답만 제공
-      const response = this.generateTemporaryResponse(conversation.lang, text);
+      // RAG 검색 및 답변 생성
+      const ragResponse = await this.processRAGQuery(chatId, text, detectedLang);
 
       await services.telegram.sendMessage({
         chatId,
-        text: response,
+        text: ragResponse.response,
         parseMode: 'HTML'
       });
 
       // Assistant 메시지 저장
-      await services.conversation.saveMessage(chatId, 'assistant', response);
+      await services.conversation.saveMessage(chatId, 'assistant', ragResponse.response);
 
     } catch (error) {
       ErrorUtils.logError(error, `Message Processing - ${chatId}`);
@@ -178,6 +177,80 @@ export class TelegramController {
         text: errorResponse,
         parseMode: 'HTML'
       });
+    }
+  }
+
+  /**
+   * RAG 질의응답 처리
+   * RAGController의 로직을 내부에서 호출
+   */
+  private async processRAGQuery(chatId: string, question: string, lang: Language): Promise<{
+    response: string;
+    hasEvidence: boolean;
+    searchScore: number;
+  }> {
+    const services = getServices();
+    
+    try {
+      // 1. 대화 메모리 컨텍스트 구성
+      const memoryContext = await services.conversation.buildMemoryContext(
+        chatId,
+        DEFAULT_VALUES.MAX_MEMORY_TOKENS
+      );
+
+      // 2. RAG 검색 수행
+      const searchResults = await this.performRAGSearch(question, lang);
+
+      // 3. 가드레일 적용 - 최소 스코어 임계값 확인
+      if (searchResults.maxScore < DEFAULT_VALUES.MIN_SEARCH_SCORE) {
+        const noEvidenceResponse = this.generateNoEvidenceResponse(lang);
+        
+        return {
+          response: noEvidenceResponse,
+          hasEvidence: false,
+          searchScore: searchResults.maxScore
+        };
+      }
+
+      // 4. 시스템 프롬프트 구성
+      const systemPrompt = this.buildSystemPrompt(
+        lang,
+        memoryContext,
+        searchResults.documents,
+        question
+      );
+
+      // 5. OpenAI Chat Completion 호출
+      const aiResponse = await services.openai.generateAnswer(systemPrompt, question);
+
+      // 6. 답변 후처리 (출처 정보 추가)
+      const finalResponse = this.postProcessResponse(
+        aiResponse,
+        searchResults.documents,
+        lang
+      );
+
+      console.log(`RAG query completed for ${chatId}: score=${searchResults.maxScore.toFixed(3)}, tokens=${memoryContext.tokenCount}`);
+
+      return {
+        response: finalResponse,
+        hasEvidence: true,
+        searchScore: searchResults.maxScore
+      };
+
+    } catch (error) {
+      ErrorUtils.logError(error, `RAG Processing - ${chatId}`);
+      
+      // RAG 처리 실패 시 기본 응답
+      const fallbackResponse = lang === 'en'
+        ? '🔧 **System Error**\n\nI apologize, but I\'m experiencing technical difficulties. Please try again later or contact support if the problem persists.\n\n**Available Commands:**\n• `/help` - Show help\n• `/reset` - Reset conversation'
+        : '🔧 **시스템 오류**\n\n죄송합니다. 기술적인 문제가 발생했습니다. 잠시 후 다시 시도해 주시거나 문제가 지속되면 지원팀에 연락해 주세요.\n\n**사용 가능한 명령어:**\n• `/help` - 도움말\n• `/reset` - 대화 초기화';
+
+      return {
+        response: fallbackResponse,
+        hasEvidence: false,
+        searchScore: 0
+      };
     }
   }
 
@@ -314,14 +387,215 @@ export class TelegramController {
   }
 
   /**
-   * Phase 4 이전 임시 응답 생성
+   * RAG 검색 수행
    */
-  private generateTemporaryResponse(lang: Language, userText: string): string {
-    if (lang === 'en') {
-      return `🤖 <b>Message Received</b>\n\nThank you for your message! The RAG-based response system will be implemented in Phase 4.\n\n<i>Your message: "${userText.substring(0, 200)}${userText.length > 200 ? '...' : ''}"</i>\n\n<b>💡 Available commands:</b>\n• <code>/help</code> - Show help\n• <code>/reset</code> - Reset conversation\n• <code>/lang ko|en</code> - Change language`;
+  private async performRAGSearch(
+    query: string,
+    lang: Language,
+    topK: number = DEFAULT_VALUES.RAG_TOP_K
+  ): Promise<{
+    documents: Array<{
+      score: number;
+      title?: string;
+      text: string;
+      filePath: string;
+      url?: string;
+      fileId: string;
+      seq: number;
+    }>;
+    maxScore: number;
+  }> {
+    const services = getServices();
+
+    try {
+      // 1. 질문 전처리
+      const processedQuery = this.preprocessQuery(query);
+      
+      // 2. 질문 임베딩 생성
+      const queryEmbedding = await services.openai.generateEmbedding(processedQuery);
+
+      // 3. Qdrant 검색 수행
+      const searchResults = await services.qdrant.search(queryEmbedding, {
+        topK,
+        filter: lang !== DEFAULT_VALUES.LANG ? {
+          must: [
+            {
+              key: 'lang',
+              match: { value: lang }
+            }
+          ]
+        } : undefined
+      });
+
+      // 4. MMR(Maximal Marginal Relevance)로 중복 제거
+      const diversifiedResults = services.qdrant.applyMMR(searchResults, 0.7);
+
+      const maxScore = diversifiedResults.length > 0 ? diversifiedResults[0].score : 0;
+
+      console.log(`RAG search completed: ${diversifiedResults.length} documents, max_score=${maxScore.toFixed(3)}`);
+
+      return {
+        documents: diversifiedResults,
+        maxScore
+      };
+
+    } catch (error) {
+      ErrorUtils.logError(error, 'RAG Search Performance');
+      throw error;
+    }
+  }
+
+  /**
+   * 시스템 프롬프트 구성
+   */
+  private buildSystemPrompt(
+    lang: Language,
+    memoryContext: {
+      summary?: string;
+      recentMessages: Array<{ role: string; text: string; }>;
+      tokenCount: number;
+    },
+    documents: Array<{
+      title?: string;
+      text: string;
+      filePath: string;
+      url?: string;
+    }>,
+    userQuestion: string
+  ): string {
+    const basePrompt = lang === 'en' 
+      ? this.getEnglishSystemPrompt()
+      : this.getKoreanSystemPrompt();
+
+    const sections = [basePrompt];
+
+    // 대화 요약 추가 (있는 경우)
+    if (memoryContext.summary) {
+      const summarySection = lang === 'en'
+        ? `\n[CONVERSATION SUMMARY]\n${memoryContext.summary}\n`
+        : `\n[대화 요약]\n${memoryContext.summary}\n`;
+      sections.push(summarySection);
     }
 
-    return `🤖 <b>메시지 수신 완료</b>\n\n메시지를 잘 받았습니다! RAG 기반 질의응답 시스템은 Phase 4에서 구현될 예정입니다.\n\n<i>귀하의 메시지: "${userText.substring(0, 200)}${userText.length > 200 ? '...' : ''}"</i>\n\n<b>💡 사용 가능한 명령어:</b>\n• <code>/help</code> - 도움말\n• <code>/reset</code> - 대화 초기화\n• <code>/lang ko|en</code> - 언어 변경`;
+    // 최근 대화 추가 (있는 경우)
+    if (memoryContext.recentMessages.length > 0) {
+      const recentSection = lang === 'en' 
+        ? '[RECENT CONVERSATION]\n'
+        : '[최근 대화]\n';
+      
+      const recentMessages = memoryContext.recentMessages
+        .slice(-5) // 최근 5개만
+        .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.text}`)
+        .join('\n');
+
+      sections.push(`\n${recentSection}${recentMessages}\n`);
+    }
+
+    // RAG 검색 결과 추가
+    const evidenceSection = lang === 'en'
+      ? '\n[POLICY EVIDENCE]\n'
+      : '\n[규정 근거]\n';
+
+    const evidenceText = documents.map((doc, index) => {
+      const header = doc.title ? `${index + 1}. ${doc.title}` : `${index + 1}. ${doc.filePath}`;
+      return `${header}\n${doc.text}\n`;
+    }).join('\n');
+
+    sections.push(`${evidenceSection}${evidenceText}`);
+
+    // 중요한 가드레일 재강조
+    const guardRail = lang === 'en'
+      ? '\nIMPORTANT: Base your answer ONLY on the [POLICY EVIDENCE] above. Do NOT use conversation context as evidence. If the evidence is insufficient, say "The policy does not contain this information."\n'
+      : '\n중요: 답변은 반드시 위의 [규정 근거]에만 기반해야 합니다. 대화 맥락을 근거로 사용하지 마세요. 근거가 부족하면 "규정에 해당 내용이 없습니다"라고 답하세요.\n';
+
+    sections.push(guardRail);
+
+    return sections.join('');
+  }
+
+  /**
+   * 근거 없음 응답 생성
+   */
+  private generateNoEvidenceResponse(lang: Language): string {
+    if (lang === 'en') {
+      return `❌ **Information Not Available**\n\nI apologize, but I cannot find relevant information in the KNUE regulations and guidelines for your question.\n\n**Possible reasons:**\n• The topic may not be covered in the current regulation documents\n• Different search terms might be needed\n• The information might be in documents not yet indexed\n\n**Suggestions:**\n• Try rephrasing your question with different keywords\n• Check the official KNUE website for the latest information\n• Contact the relevant department directly for specific inquiries\n\n**Available Commands:**\n• \`/help\` - Show usage instructions\n• \`/reset\` - Reset conversation session`;
+    }
+
+    return `❌ **규정에 해당 내용이 없습니다**\n\n죄송하지만 귀하의 질문과 관련된 내용을 KNUE 규정·업무지침에서 찾을 수 없습니다.\n\n**가능한 원인:**\n• 해당 주제가 현재 규정 문서에 포함되지 않았을 수 있습니다\n• 다른 검색 키워드가 필요할 수 있습니다\n• 아직 색인되지 않은 문서에 정보가 있을 수 있습니다\n\n**제안사항:**\n• 다른 키워드로 질문을 다시 작성해 보세요\n• 최신 정보는 KNUE 공식 홈페이지를 확인해 주세요\n• 구체적인 문의는 해당 부서에 직접 연락하시기 바랍니다\n\n**사용 가능한 명령어:**\n• \`/help\` - 사용법 안내\n• \`/reset\` - 대화 세션 초기화`;
+  }
+
+  /**
+   * 답변 후처리
+   */
+  private postProcessResponse(
+    aiResponse: string, 
+    documents: Array<{
+      title?: string;
+      text: string;
+      filePath: string;
+      url?: string;
+    }>,
+    lang: Language
+  ): string {
+    // 출처 정보 생성
+    const sourceHeader = lang === 'en' ? '\n\n**📋 Sources:**' : '\n\n**📋 참고 자료:**';
+    
+    const sources = documents.slice(0, 3).map((doc, index) => {
+      const title = doc.title || doc.filePath.split('/').pop()?.replace('.md', '') || 'Document';
+      const link = doc.url ? `[${title}](${doc.url})` : title;
+      return `${index + 1}. ${link}`;
+    }).join('\n');
+
+    // 응답에 출처 추가
+    return `${aiResponse}${sourceHeader}\n${sources}`;
+  }
+
+  /**
+   * 질문 전처리
+   */
+  private preprocessQuery(query: string): string {
+    // 기본적인 전처리: 불필요한 공백 제거, 소문자 변환 등
+    return query.trim().replace(/\s+/g, ' ');
+  }
+
+  /**
+   * 한국어 시스템 프롬프트
+   */
+  private getKoreanSystemPrompt(): string {
+    return `너는 KNUE 규정·업무지침 전용 챗봇이다.
+
+핵심 원칙:
+1) 답변은 아래 [규정 근거]에만 기반한다.
+2) [대화 요약/최근 대화]는 맥락 이해 보조용이며, 근거로 인용 금지.
+3) 근거가 없거나 불충분하면 "규정에 해당 내용이 없습니다."라고 답한다.
+4) 한국어로 간결하고 정확하게 답하라.
+5) 출처를 명시하여 신뢰성을 높인다.
+
+답변 형식:
+- 핵심 내용을 먼저 제시
+- 세부 사항은 단계별로 설명
+- 관련 규정 조항이나 문서명 인용
+- 불확실한 내용은 추측하지 말고 "확인 필요"라고 명시`;
+  }
+
+  /**
+   * 영어 시스템 프롬프트
+   */
+  private getEnglishSystemPrompt(): string {
+    return `You are a specialized chatbot for KNUE regulations and guidelines.
+
+Core Principles:
+1) Base answers ONLY on the [POLICY EVIDENCE] below.
+2) [Conversation Summary/Recent Conversation] is for context understanding only, NOT for citation.
+3) If evidence is lacking or insufficient, respond "This information is not available in the regulations."
+4) Respond concisely and accurately in English.
+5) Cite sources to enhance credibility.
+
+Response Format:
+- Present key information first
+- Explain details step by step
+- Cite relevant regulation articles or document names
+- For uncertain content, state "verification needed" rather than guessing`;
   }
 
   /**
@@ -329,10 +603,10 @@ export class TelegramController {
    */
   private getHelpText(lang: Language): string {
     if (lang === 'en') {
-      return `🤖 <b>KNUE Policy Assistant Bot</b>\n\n<b>📖 How to use:</b>\n• Ask questions about KNUE policies and guidelines freely.\n• More specific and clear questions will get better answers.\n\n<b>🔧 Commands:</b>\n• <code>/help</code> - Show this help message\n• <code>/reset</code> - Reset conversation session\n• <code>/lang ko|en</code> - Change response language\n\n<b>📝 Example questions:</b>\n• "What are the promotion criteria for professors?"\n• "Please explain the student grade processing procedures"\n• "Tell me about research fund usage regulations"\n\n<b>⚠️ Important notes:</b>\n• Answers are based only on documented policies\n• Personal or sensitive information is not handled\n• Please check the official website for the latest policy information\n\n<b>💡 Tips:</b>\n• Ask in complete sentences rather than keywords\n• Be specific about what you want to know\n• Ask about one topic at a time rather than multiple topics\n\n<i>🚧 Current Status: Phase 3 - Memory system active. RAG search will be available in Phase 4.</i>`;
+      return `🤖 <b>KNUE Policy Assistant Bot</b>\n\n<b>📖 How to use:</b>\n• Ask questions about KNUE policies and guidelines freely.\n• More specific and clear questions will get better answers.\n\n<b>🔧 Commands:</b>\n• <code>/help</code> - Show this help message\n• <code>/reset</code> - Reset conversation session\n• <code>/lang ko|en</code> - Change response language\n\n<b>📝 Example questions:</b>\n• "What are the promotion criteria for professors?"\n• "Please explain the student grade processing procedures"\n• "Tell me about research fund usage regulations"\n\n<b>⚠️ Important notes:</b>\n• Answers are based only on documented policies\n• Personal or sensitive information is not handled\n• Please check the official website for the latest policy information\n\n<b>💡 Tips:</b>\n• Ask in complete sentences rather than keywords\n• Be specific about what you want to know\n• Ask about one topic at a time rather than multiple topics\n\n<i>✅ Current Status: Phase 4 - Full RAG system active with conversation memory.</i>`;
     }
 
-    return `🤖 <b>KNUE 규정·업무지침 답변봇</b>\n\n<b>📖 사용법:</b>\n• KNUE 규정이나 업무지침에 대한 질문을 자유롭게 입력하세요.\n• 구체적이고 명확한 질문일수록 정확한 답변을 받을 수 있습니다.\n\n<b>🔧 명령어:</b>\n• <code>/help</code> - 이 도움말 보기\n• <code>/reset</code> - 대화 세션 초기화\n• <code>/lang ko|en</code> - 응답 언어 변경\n\n<b>📝 예시 질문:</b>\n• "교수 승진 기준은 무엇인가요?"\n• "학생 성적 처리 절차를 알려주세요"\n• "연구비 사용 규정에 대해 설명해 주세요"\n\n<b>⚠️ 주의사항:</b>\n• 규정에 명시된 내용만 답변합니다\n• 개인 정보나 민감한 내용은 다루지 않습니다\n• 최신 규정 정보는 공식 홈페이지를 확인해 주세요\n\n<b>💡 팁:</b>\n• 키워드보다는 완전한 문장으로 질문하세요\n• 궁금한 내용을 구체적으로 명시하세요\n• 여러 주제가 섞인 질문보다는 하나의 주제로 질문하세요\n\n<i>🚧 현재 상태: Phase 3 - 메모리 시스템 활성화. RAG 검색은 Phase 4에서 제공됩니다.</i>`;
+    return `🤖 <b>KNUE 규정·업무지침 답변봇</b>\n\n<b>📖 사용법:</b>\n• KNUE 규정이나 업무지침에 대한 질문을 자유롭게 입력하세요.\n• 구체적이고 명확한 질문일수록 정확한 답변을 받을 수 있습니다.\n\n<b>🔧 명령어:</b>\n• <code>/help</code> - 이 도움말 보기\n• <code>/reset</code> - 대화 세션 초기화\n• <code>/lang ko|en</code> - 응답 언어 변경\n\n<b>📝 예시 질문:</b>\n• "교수 승진 기준은 무엇인가요?"\n• "학생 성적 처리 절차를 알려주세요"\n• "연구비 사용 규정에 대해 설명해 주세요"\n\n<b>⚠️ 주의사항:</b>\n• 규정에 명시된 내용만 답변합니다\n• 개인 정보나 민감한 내용은 다루지 않습니다\n• 최신 규정 정보는 공식 홈페이지를 확인해 주세요\n\n<b>💡 팁:</b>\n• 키워드보다는 완전한 문장으로 질문하세요\n• 궁금한 내용을 구체적으로 명시하세요\n• 여러 주제가 섞인 질문보다는 하나의 주제로 질문하세요\n\n<i>✅ 현재 상태: Phase 4 - 대화 메모리와 함께 완전한 RAG 시스템 활성화.</i>`;
   }
 
   /**

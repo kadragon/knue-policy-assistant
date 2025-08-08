@@ -1,18 +1,22 @@
 import express from 'express';
 import { appConfig } from './config';
 import { getServices } from './services';
-import { HealthController, TelegramController } from './controllers';
+import { HealthController, TelegramController, GitHubController, RAGController } from './controllers';
 import { ErrorUtils, DateUtils } from './utils';
 
 class App {
   private app: express.Application;
   private healthController: HealthController;
   private telegramController: TelegramController;
+  private githubController: GitHubController;
+  private ragController: RAGController;
 
   constructor() {
     this.app = express();
     this.healthController = new HealthController();
     this.telegramController = new TelegramController();
+    this.githubController = new GitHubController();
+    this.ragController = new RAGController();
     this.setupMiddleware();
     this.setupRoutes();
     this.setupErrorHandling();
@@ -54,17 +58,24 @@ class App {
     // Phase 3: Telegram webhook endpoint
     this.app.post('/telegram/webhook', this.telegramController.handleWebhook.bind(this.telegramController));
     
-    // Phase 3: Management API endpoints
+    // Phase 3: Conversation management API endpoints
     this.app.get('/api/conversations/:chatId/stats', this.telegramController.getConversationStats.bind(this.telegramController));
     this.app.post('/api/conversations/:chatId/force-summary', this.telegramController.forceSummary.bind(this.telegramController));
     this.app.get('/api/conversations/:chatId/context', this.telegramController.getMemoryContext.bind(this.telegramController));
 
-    this.app.post('/github/webhook', (_req, res) => {
-      res.status(501).json({ error: 'GitHub webhook not implemented yet' });
-    });
+    // Phase 4: GitHub webhook endpoints
+    this.app.post('/github/webhook', this.githubController.handleWebhook.bind(this.githubController));
+    this.app.post('/api/sync/manual', this.githubController.triggerManualSync.bind(this.githubController));
+    this.app.get('/api/sync/status', this.githubController.getSyncStatus.bind(this.githubController));
 
+    // Phase 4: RAG search endpoints
+    this.app.post('/api/rag/query', this.ragController.processQuery.bind(this.ragController));
+    this.app.post('/api/rag/search', this.ragController.performSearch.bind(this.ragController));
+    this.app.post('/api/rag/feedback', this.ragController.collectFeedback.bind(this.ragController));
+
+    // Phase 4: Polling worker (alternative to webhook)
     this.app.post('/worker/sync', (_req, res) => {
-      res.status(501).json({ error: 'Worker sync not implemented yet' });
+      res.status(501).json({ error: 'Polling worker not implemented yet - will be added if needed' });
     });
 
     // Default route
@@ -72,15 +83,20 @@ class App {
       res.json({
         name: 'KNUE Policy Assistant',
         version: '1.0.0',
-        status: 'Phase 3 - Memory System Active',
+        status: 'Phase 4 - Full RAG System Active',
         endpoints: [
           'GET /healthz - Health check',
           'POST /telegram/webhook - Telegram webhook (Active)',
           'GET /api/conversations/:chatId/stats - Conversation statistics',
           'POST /api/conversations/:chatId/force-summary - Force summary generation',
           'GET /api/conversations/:chatId/context - Memory context',
-          'POST /github/webhook - GitHub webhook (coming in Phase 4)',
-          'POST /worker/sync - Sync worker (coming in Phase 4)'
+          'POST /github/webhook - GitHub webhook (Active)',
+          'POST /api/sync/manual - Manual sync trigger',
+          'GET /api/sync/status - Sync status',
+          'POST /api/rag/query - RAG query processing',
+          'POST /api/rag/search - Search documents',
+          'POST /api/rag/feedback - Collect feedback',
+          'POST /worker/sync - Polling worker (if needed)'
         ]
       });
     });
@@ -90,7 +106,7 @@ class App {
       res.status(404).json({
         error: 'Not Found',
         message: `Route ${req.method} ${req.originalUrl} not found`,
-        availableEndpoints: ['/healthz', '/telegram/webhook', '/github/webhook', '/worker/sync']
+        availableEndpoints: ['/healthz', '/telegram/webhook', '/github/webhook', '/api/rag/query', '/api/sync/manual']
       });
     });
   }

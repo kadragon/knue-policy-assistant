@@ -352,7 +352,9 @@ export const COLLECTION_NAMES = {
 export const DEFAULT_VALUES = {
   LANG: 'ko' as Language,
   TOP_K: 8,
+  RAG_TOP_K: 6,
   MIN_SCORE: 0.80,
+  MIN_SEARCH_SCORE: 0.80,
   MAX_CHUNK_SIZE: 800,
   CHUNK_OVERLAP: 80,
   MAX_RECENT_MESSAGES: 20,
