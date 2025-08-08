@@ -1,16 +1,18 @@
 import express from 'express';
 import { appConfig } from './config';
 import { getServices } from './services';
-import { HealthController } from './controllers';
+import { HealthController, TelegramController } from './controllers';
 import { ErrorUtils, DateUtils } from './utils';
 
 class App {
   private app: express.Application;
   private healthController: HealthController;
+  private telegramController: TelegramController;
 
   constructor() {
     this.app = express();
     this.healthController = new HealthController();
+    this.telegramController = new TelegramController();
     this.setupMiddleware();
     this.setupRoutes();
     this.setupErrorHandling();
@@ -49,10 +51,13 @@ class App {
     this.app.get('/healthz', this.healthController.healthCheck.bind(this.healthController));
     this.app.get('/health', this.healthController.healthCheck.bind(this.healthController));
 
-    // Placeholder endpoints for Phase 3+
-    this.app.post('/telegram/webhook', (_req, res) => {
-      res.status(501).json({ error: 'Telegram webhook not implemented yet' });
-    });
+    // Phase 3: Telegram webhook endpoint
+    this.app.post('/telegram/webhook', this.telegramController.handleWebhook.bind(this.telegramController));
+    
+    // Phase 3: Management API endpoints
+    this.app.get('/api/conversations/:chatId/stats', this.telegramController.getConversationStats.bind(this.telegramController));
+    this.app.post('/api/conversations/:chatId/force-summary', this.telegramController.forceSummary.bind(this.telegramController));
+    this.app.get('/api/conversations/:chatId/context', this.telegramController.getMemoryContext.bind(this.telegramController));
 
     this.app.post('/github/webhook', (_req, res) => {
       res.status(501).json({ error: 'GitHub webhook not implemented yet' });
@@ -67,10 +72,13 @@ class App {
       res.json({
         name: 'KNUE Policy Assistant',
         version: '1.0.0',
-        status: 'Phase 2 - External Services Integration Complete',
+        status: 'Phase 3 - Memory System Active',
         endpoints: [
           'GET /healthz - Health check',
-          'POST /telegram/webhook - Telegram webhook (coming in Phase 3)',
+          'POST /telegram/webhook - Telegram webhook (Active)',
+          'GET /api/conversations/:chatId/stats - Conversation statistics',
+          'POST /api/conversations/:chatId/force-summary - Force summary generation',
+          'GET /api/conversations/:chatId/context - Memory context',
           'POST /github/webhook - GitHub webhook (coming in Phase 4)',
           'POST /worker/sync - Sync worker (coming in Phase 4)'
         ]

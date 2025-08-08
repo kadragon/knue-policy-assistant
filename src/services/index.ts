@@ -3,6 +3,7 @@ import { QdrantService } from './qdrant';
 import { OpenAIService } from './openai';
 import { TelegramService } from './telegram';
 import { GitHubService } from './github';
+import { ConversationService } from './conversation';
 import { ServiceError } from '../types';
 
 export class ServiceContainer {
@@ -13,6 +14,7 @@ export class ServiceContainer {
   public readonly openai: OpenAIService;
   public readonly telegram: TelegramService;
   public readonly github: GitHubService;
+  public readonly conversation: ConversationService;
 
   private constructor() {
     try {
@@ -21,6 +23,9 @@ export class ServiceContainer {
       this.openai = new OpenAIService();
       this.telegram = new TelegramService();
       this.github = new GitHubService();
+      
+      // ConversationService는 다른 서비스들에 의존하므로 나중에 초기화
+      this.conversation = new ConversationService(this.firestore, this.openai);
     } catch (error) {
       throw new ServiceError(
         'Failed to initialize services',
@@ -124,6 +129,7 @@ export { QdrantService } from './qdrant';
 export { OpenAIService } from './openai';
 export { TelegramService } from './telegram';
 export { GitHubService } from './github';
+export { ConversationService } from './conversation';
 
 // Global service instance getter
 export const getServices = (): ServiceContainer => ServiceContainer.getInstance();
