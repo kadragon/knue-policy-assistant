@@ -5,7 +5,6 @@ import {
   COMMANDS,
   DEFAULT_VALUES 
 } from '../types';
-import { ServiceError } from '../types';
 import { getServices } from '../services';
 import { ValidationUtils, ErrorUtils, DateUtils } from '../utils';
 
@@ -181,61 +180,33 @@ export class TelegramController {
   }
 
   /**
-   * RAG 질의응답 처리
-   * RAGController의 로직을 내부에서 호출
+   * RAG 질의응답 처리 (LangChain 기반)
+   * 단순화된 LangChain 서비스 호출
    */
   private async processRAGQuery(chatId: string, question: string, lang: Language): Promise<{
     response: string;
     hasEvidence: boolean;
-    searchScore: number;
+    sources: Array<{title: string; filePath: string; url: string;}>;
   }> {
     const services = getServices();
     
     try {
-      // 1. 대화 메모리 컨텍스트 구성
-      const memoryContext = await services.conversation.buildMemoryContext(
-        chatId,
-        DEFAULT_VALUES.MAX_MEMORY_TOKENS
-      );
+      // 1. 대화 기록 조회 (LangChain용)
+      const messages = await services.conversation.getRecentMessages(chatId, 10);
 
-      // 2. RAG 검색 수행
-      const searchResults = await this.performRAGSearch(question, lang);
-
-      // 3. 가드레일 적용 - 최소 스코어 임계값 확인
-      if (searchResults.maxScore < DEFAULT_VALUES.MIN_SEARCH_SCORE) {
-        const noEvidenceResponse = this.generateNoEvidenceResponse(lang);
-        
-        return {
-          response: noEvidenceResponse,
-          hasEvidence: false,
-          searchScore: searchResults.maxScore
-        };
-      }
-
-      // 4. 시스템 프롬프트 구성
-      const systemPrompt = this.buildSystemPrompt(
-        lang,
-        memoryContext,
-        searchResults.documents,
-        question
-      );
-
-      // 5. OpenAI Chat Completion 호출
-      const aiResponse = await services.openai.generateAnswer(systemPrompt, question);
-
-      // 6. 답변 후처리 (출처 정보 추가)
-      const finalResponse = this.postProcessResponse(
-        aiResponse,
-        searchResults.documents,
+      // 2. LangChain 대화형 RAG 호출
+      const ragResponse = await services.langchain.conversationalQuery(
+        question,
+        messages,
         lang
       );
 
-      console.log(`RAG query completed for ${chatId}: score=${searchResults.maxScore.toFixed(3)}, tokens=${memoryContext.tokenCount}`);
+      console.log(`LangChain RAG completed for ${chatId}: sources=${ragResponse.sources.length}`);
 
       return {
-        response: finalResponse,
-        hasEvidence: true,
-        searchScore: searchResults.maxScore
+        response: ragResponse.answer,
+        hasEvidence: ragResponse.sources.length > 0,
+        sources: ragResponse.sources
       };
 
     } catch (error) {
@@ -249,7 +220,7 @@ export class TelegramController {
       return {
         response: fallbackResponse,
         hasEvidence: false,
-        searchScore: 0
+        sources: []
       };
     }
   }

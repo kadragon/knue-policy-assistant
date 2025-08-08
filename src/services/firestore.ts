@@ -246,6 +246,67 @@ export class FirestoreService {
     }
   }
 
+  // Sync job operations
+  async createSyncJob(job: SyncJob): Promise<void> {
+    try {
+      await this.db.collection(COLLECTION_NAMES.JOBS).doc(job.jobId).set(job);
+    } catch (error) {
+      throw new ServiceError('Failed to create sync job', 'firestore', 'CREATE_SYNC_JOB_ERROR', 500, error);
+    }
+  }
+
+  async getRecentSyncJobs(repoId: string, limit: number = 10): Promise<SyncJob[]> {
+    try {
+      const snapshot = await this.db
+        .collection(COLLECTION_NAMES.JOBS)
+        .where('repoId', '==', repoId)
+        .orderBy('createdAt', 'desc')
+        .limit(limit)
+        .get();
+
+      return snapshot.docs.map(doc => this.convertToSyncJob(doc as QueryDocumentSnapshot<DocumentData>));
+    } catch (error) {
+      throw new ServiceError('Failed to get recent sync jobs', 'firestore', 'GET_SYNC_JOBS_ERROR', 500, error);
+    }
+  }
+
+  async updateSyncJobProgress(jobId: string, progress: Partial<SyncJob>): Promise<void> {
+    try {
+      await this.db.collection(COLLECTION_NAMES.JOBS).doc(jobId).update({
+        ...progress,
+        updatedAt: Timestamp.now()
+      });
+    } catch (error) {
+      throw new ServiceError('Failed to update sync job progress', 'firestore', 'UPDATE_SYNC_JOB_ERROR', 500, error);
+    }
+  }
+
+  async completeSyncJob(jobId: string, results: Partial<SyncJob>): Promise<void> {
+    try {
+      await this.db.collection(COLLECTION_NAMES.JOBS).doc(jobId).update({
+        ...results,
+        status: 'completed',
+        completedAt: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      });
+    } catch (error) {
+      throw new ServiceError('Failed to complete sync job', 'firestore', 'COMPLETE_SYNC_JOB_ERROR', 500, error);
+    }
+  }
+
+  async failSyncJob(jobId: string, errorMessage: string): Promise<void> {
+    try {
+      await this.db.collection(COLLECTION_NAMES.JOBS).doc(jobId).update({
+        status: 'failed',
+        errorMessage,
+        failedAt: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      });
+    } catch (error) {
+      throw new ServiceError('Failed to fail sync job', 'firestore', 'FAIL_SYNC_JOB_ERROR', 500, error);
+    }
+  }
+
   // Health check
   async healthCheck(): Promise<boolean> {
     try {
@@ -324,6 +385,29 @@ export class FirestoreService {
       notificationsEnabled: data['notificationsEnabled'],
       timezone: data['timezone'],
       metadata: data['metadata'],
+      createdAt: data['createdAt'],
+      updatedAt: data['updatedAt']
+    };
+  }
+
+  private convertToSyncJob(doc: QueryDocumentSnapshot<DocumentData>): SyncJob {
+    const data = doc.data();
+    return {
+      jobId: doc.id,
+      repoId: data['repoId'],
+      type: data['type'],
+      status: data['status'],
+      commit: data['commit'],
+      filesAdded: data['filesAdded'] || 0,
+      filesModified: data['filesModified'] || 0,
+      filesDeleted: data['filesDeleted'] || 0,
+      chunksCreated: data['chunksCreated'] || 0,
+      chunksUpdated: data['chunksUpdated'] || 0,
+      chunksDeleted: data['chunksDeleted'] || 0,
+      errorMessage: data['errorMessage'],
+      startedAt: data['startedAt'],
+      completedAt: data['completedAt'],
+      failedAt: data['failedAt'],
       createdAt: data['createdAt'],
       updatedAt: data['updatedAt']
     };

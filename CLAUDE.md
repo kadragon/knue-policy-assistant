@@ -3,15 +3,18 @@
 ## 프로젝트 개요
 
 - **목표**: KNUE 규정·업무지침을 실시간 동기화하여 사용자 질문에 정확한 답변 제공
-- **스택**: Telegram Bot + Cloud Run(Node.js/Express) + OpenAI + Qdrant Cloud + Firestore
+- **스택**: Telegram Bot + Cloud Run(Node.js/Express) + **LangChain** + OpenAI + Qdrant Cloud + Firestore
 - **원칙**: 규정 근거가 있는 내용만 답변, 추측 금지
+- **프레임워크**: LangChain 기반 RAG 체인 및 대화 메모리 시스템
 
 ## 아키텍처
 
 - **백엔드**: Cloud Run에서 Node.js/Express + TypeScript로 구현
-- **벡터DB**: Qdrant Cloud (text-embedding-3-small, dim=1536)
+- **AI 프레임워크**: **LangChain** (체인 기반 RAG + 메모리 관리)
+- **벡터DB**: Qdrant Cloud (text-embedding-3-small, dim=1536) + **@langchain/qdrant**
 - **메타데이터**: Firestore (문서형 메타데이터)
-- **AI**: OpenAI (임베딩 + 챗 완성)
+- **LLM**: OpenAI GPT-4 + **@langchain/openai**
+- **메모리**: LangChain BufferWindowMemory + ConversationSummaryMemory
 
 ## 주요 기능
 
@@ -188,8 +191,12 @@ MIN_INSTANCES=1
 
 - `express` - 웹 프레임워크
 - `@google-cloud/firestore` - Firestore 클라이언트
-- `@qdrant/js-client-rest` - Qdrant 클라이언트
-- `openai` - OpenAI API 클라이언트
+- **`@langchain/core`** - LangChain 핵심 프레임워크
+- **`@langchain/openai`** - LangChain OpenAI 통합
+- **`@langchain/qdrant`** - LangChain Qdrant 벡터스토어
+- **`@langchain/community`** - LangChain 커뮤니티 도구
+- `@qdrant/js-client-rest` - Qdrant 직접 클라이언트 (필요시)
+- `openai` - OpenAI API 클라이언트 (LangChain 보조)
 - `telegraf` - Telegram Bot 프레임워크
 - `@octokit/rest` - GitHub API 클라이언트
 - `zod` - 스키마 검증
@@ -207,20 +214,22 @@ MIN_INSTANCES=1
 - `prettier` - 코드 포맷팅
 - `nodemon`, `ts-node` - 개발 서버
 
-## 대화 맥락 전략
+## 대화 맥락 전략 (LangChain 기반)
 
 ### 기본 원칙
 
-- **대화 맥락**: Firestore 세션 + 요약으로 유지
-- **정답 근거**: 오직 Qdrant RAG 문서에서만 가져옴
-- **메모리 역할**: 맥락 보조용, 근거 아님
+- **대화 맥락**: **LangChain Memory** + Firestore 세션으로 유지
+- **정답 근거**: 오직 **LangChain QdrantVectorStore** RAG 문서에서만 가져옴
+- **메모리 역할**: **ConversationalRetrievalChain**의 맥락 보조용, 근거 아님
+- **체인 구조**: RetrievalQA + ConversationSummaryBufferMemory
 
-### 성능/비용 최적화
+### 성능/비용 최적화 (LangChain)
 
-- Firestore 읽기: 최근 N턴 + summary (1~2회)
-- Firestore 쓰기: 메시지 2건 (요약 시 +1건)
-- 외부 메모리 호출 없음 → 네트워크 대기시간 절감
-- 콜드 스타트 완화: min-instances=1 권장
+- **LangChain Memory**: BufferWindowMemory (최근 N턴) + ConversationSummaryMemory (자동 요약)
+- **벡터 검색**: QdrantVectorStore similarity_search (top-k 최적화)
+- **체인 캐싱**: LangChain 체인 결과 캐싱으로 응답 속도 향상
+- Firestore 읽기/쓰기: LangChain Memory와 병행 (세션 백업)
+- 콜드 스타트 완화: min-instances=1 + LangChain 체인 pre-loading
 
 ## 참고사항
 

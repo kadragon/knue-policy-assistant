@@ -2,8 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { appConfig } from '../config';
 import { getServices } from '../services';
-import { ServiceError } from '../types';
-import { ErrorUtils, DateUtils, ValidationUtils } from '../utils';
+import { ErrorUtils, DateUtils } from '../utils';
 
 /**
  * GitHub Webhook 컨트롤러
@@ -123,10 +122,10 @@ export class GitHubController {
    * 동기화 작업 상태 조회 (관리자용)
    * GET /api/sync/status
    */
-  async getSyncStatus(req: Request, res: Response): Promise<void> {
+  async getSyncStatus(_req: Request, res: Response): Promise<void> {
     try {
       const services = getServices();
-      const recentJobs = await services.firestore.getRecentSyncJobs(10);
+      const recentJobs = await services.firestore.getRecentSyncJobs(appConfig.REPO_ID, 10);
 
       res.json({
         success: true,
@@ -135,8 +134,9 @@ export class GitHubController {
             jobId: job.jobId,
             type: job.type,
             status: job.status,
-            filesProcessed: job.filesProcessed,
-            filesTotal: job.filesTotal,
+            filesAdded: job.filesAdded,
+            filesModified: job.filesModified,
+            filesDeleted: job.filesDeleted,
             startedAt: job.startedAt?.toDate(),
             completedAt: job.completedAt?.toDate(),
             errorMessage: job.errorMessage
@@ -304,7 +304,7 @@ export class GitHubController {
       // 동기화 작업 생성
       await services.firestore.createSyncJob({
         jobId,
-        type: 'incremental',
+        type: 'webhook',
         status: 'running',
         commit: commitSha,
         filesTotal: changedFiles.length,

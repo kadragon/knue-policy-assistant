@@ -142,12 +142,48 @@ export interface SearchContext {
   filters?: Record<string, any>;
 }
 
+// RAG search request
+export interface RAGSearchRequest {
+  query: string;
+  k?: number;
+  minScore?: number;
+  lang?: Language;
+}
+
 // RAG search response
 export interface RAGSearchResponse {
-  results: SearchResult[];
-  totalResults: number;
+  documents: Array<{
+    score: number;
+    title?: string;
+    text: string;
+    filePath: string;
+    url?: string;
+    fileId: string;
+    seq: number;
+  }>;
+  query: string;
+  total: number;
+  lang?: Language;
+}
+
+// RAG query request  
+export interface RAGQueryRequest {
+  question: string;
+  lang?: Language;
+  chatId?: string;
+}
+
+// RAG query response
+export interface RAGQueryResponse {
+  answer: string;
+  sources: Array<{
+    title: string;
+    filePath: string;
+    url: string;
+  }>;
+  question: string;
+  lang: Language;
   processingTime: number;
-  usedQuery: string;
 }
 
 // Telegram Types

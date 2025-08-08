@@ -96,6 +96,23 @@ export class ConversationService {
   }
 
   /**
+   * 최근 메시지 조회 (LangChain 대화 메모리용)
+   */
+  async getRecentMessages(chatId: string, limit: number = 10): Promise<Message[]> {
+    try {
+      return await this.firestoreService.getRecentMessages(chatId, limit);
+    } catch (error) {
+      throw new ServiceError(
+        'Failed to get recent messages',
+        'conversation',
+        'GET_MESSAGES_ERROR',
+        500,
+        error
+      );
+    }
+  }
+
+  /**
    * 대화 맥락 로드 (요약 + 최근 메시지)
    * Phase 4에서 RAG 검색과 함께 사용됨
    */
