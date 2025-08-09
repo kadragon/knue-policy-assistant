@@ -293,7 +293,7 @@ describe('Performance Tests', () => {
       // Arrange
       const messageCount = 50;
       const messages = Array.from({ length: messageCount }, (_, i) => ({
-        role: i % 2 === 0 ? 'user' : 'assistant' as const,
+        role: (i % 2 === 0 ? 'user' : 'assistant') as Message['role'],
         text: `대량 테스트 메시지 ${i}`
       }));
 
@@ -358,7 +358,7 @@ describe('Performance Tests', () => {
       results.forEach((result, index) => {
         // 메시지 수가 증가해도 빌드 시간이 선형적으로만 증가해야 함
         if (index > 0) {
-          const prevResult = results[index - 1];
+          const prevResult = results[index - 1]!;
           const timeRatio = result.buildTime / prevResult.buildTime;
           const messageRatio = result.messageCount / prevResult.messageCount;
           
@@ -396,7 +396,7 @@ describe('Performance Tests', () => {
       // Assert
       results.forEach((result, index) => {
         if (index > 0) {
-          const prevResult = results[index - 1];
+          const prevResult = results[index - 1]!;
           const timeRatio = result.totalTime / prevResult.totalTime;
           const sessionRatio = result.sessionCount / prevResult.sessionCount;
           

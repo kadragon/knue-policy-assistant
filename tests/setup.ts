@@ -17,6 +17,19 @@ jest.mock('../src/services/metrics', () => ({
   MetricsService: jest.fn().mockImplementation(() => mockMetricsService)
 }));
 
+// Mock config to provide required environment variables
+jest.mock('../src/config', () => ({
+  appConfig: {
+    OPENAI_API_KEY: 'test',
+    QDRANT_API_KEY: 'test',
+    QDRANT_URL: 'http://localhost',
+    COLLECTION_NAME: 'test',
+    FIRESTORE_PROJECT_ID: 'test',
+    GITHUB_WEBHOOK_SECRET: 'secret',
+    TELEGRAM_BOT_TOKEN: 'token'
+  }
+}));
+
 // 전역 테스트 설정
 beforeAll(() => {
   process.env['NODE_ENV'] = 'test';
