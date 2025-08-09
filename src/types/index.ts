@@ -111,6 +111,7 @@ export interface UserPreferences {
 
 // Payload for vector points in Qdrant
 export interface QdrantPayload {
+  [key: string]: unknown;
   repoId: string;
   fileId: string;
   filePath: string;
@@ -127,7 +128,7 @@ export interface SearchResult {
   id: string | number;
   score: number;
   payload: QdrantPayload;
-  vector?: number[];
+  vector?: number[] | undefined;
 }
 
 // RAG Search Types
@@ -198,8 +199,8 @@ export interface TelegramContext {
   lastName?: string | undefined;
   text: string;
   isCommand: boolean;
-  commandName?: string;
-  commandArgs?: string[];
+  commandName?: string | undefined;
+  commandArgs?: string[] | undefined;
 }
 
 // Telegram response
@@ -307,7 +308,7 @@ export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
 export interface ServiceHealthDetail {
   status: HealthStatus;
   responseTime: number;
-  lastError?: string;
+  lastError?: string | undefined;
   lastChecked: string;
 }
 

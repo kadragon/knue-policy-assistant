@@ -33,16 +33,41 @@ export interface RAGMetric {
   duration: number;
   chatId?: string;
   correlationId?: string;
+  metadata?: {
+    searchType?: 'similarity' | 'conversational' | 'direct';
+    minScoreThreshold?: number;
+    topK?: number;
+    language?: string;
+    totalCandidates?: number;
+    averageScore?: number;
+    scoreDistribution?: {
+      excellent: number; // >= 0.95
+      good: number;      // 0.85-0.94
+      fair: number;      // 0.80-0.84
+      poor: number;      // < 0.80
+    };
+    queryComplexity?: 'simple' | 'medium' | 'complex';
+    evidenceQuality?: 'high' | 'medium' | 'low' | 'none';
+  };
 }
 
 export interface ConversationMetric {
   timestamp: number;
   chatId: string;
-  operation: 'message' | 'summary' | 'reset';
+  operation: 'message' | 'summary' | 'reset' | 'session-create' | 'session-reset' | 'language-update' | 'context-load' | 'memory-build';
   messageCount?: number;
   duration?: number;
   success: boolean;
   correlationId?: string;
+  metadata?: {
+    messageRole?: 'user' | 'assistant';
+    summaryLength?: number;
+    summaryGenerated?: boolean;
+    tokenCount?: number;
+    memoryContextSize?: number;
+    languageChanged?: boolean;
+    sessionActive?: boolean;
+  };
 }
 
 export interface SyncMetric {
@@ -119,12 +144,36 @@ export class MetricsService {
     this.ragMetrics.push(ragMetric);
     this.trimArray(this.ragMetrics, this.MAX_METRICS_PER_TYPE);
     
-    // Log no evidence cases
+    // Log important RAG events
     if (!metric.hasEvidence) {
       logger.info('no-evidence-query', `No evidence found for query`, {
         query: metric.query.substring(0, 100),
         documentsFound: metric.documentsFound,
         maxScore: metric.maxScore,
+        chatId: metric.chatId,
+        searchType: metric.metadata?.searchType,
+        topK: metric.metadata?.topK
+      });
+    }
+    
+    // Log low-quality evidence
+    if (metric.hasEvidence && metric.maxScore < 0.85) {
+      logger.warn('low-quality-evidence', `Low quality evidence for query`, {
+        query: metric.query.substring(0, 100),
+        maxScore: metric.maxScore,
+        documentsFound: metric.documentsFound,
+        chatId: metric.chatId,
+        evidenceQuality: metric.metadata?.evidenceQuality
+      });
+    }
+    
+    // Log slow searches
+    if (metric.duration > 3000) {
+      logger.warn('slow-rag-search', `Slow RAG search detected`, {
+        query: metric.query.substring(0, 100),
+        duration: metric.duration,
+        documentsFound: metric.documentsFound,
+        searchType: metric.metadata?.searchType,
         chatId: metric.chatId
       });
     }
@@ -139,6 +188,23 @@ export class MetricsService {
     
     this.conversationMetrics.push(conversationMetric);
     this.trimArray(this.conversationMetrics, this.MAX_METRICS_PER_TYPE);
+    
+    // Log important conversation events
+    if (metric.operation === 'summary' && !metric.success) {
+      logger.warn('summary-generation-failed', `Summary generation failed for chat ${metric.chatId}`, {
+        chatId: metric.chatId,
+        duration: metric.duration,
+        messageCount: metric.messageCount
+      });
+    }
+    
+    if (metric.operation === 'session-create') {
+      logger.info('new-conversation-session', `New conversation session created`, {
+        chatId: metric.chatId,
+        success: metric.success,
+        metadata: metric.metadata
+      });
+    }
   }
 
   // Record sync operation metrics
@@ -228,6 +294,134 @@ export class MetricsService {
       averageScore: Math.round((totalScore / recentRAG.length) * 100) / 100
     };
   }
+  
+  // Get detailed RAG monitoring statistics
+  getRAGMonitoringStats(timeWindowMs: number = 60 * 60 * 1000): {
+    searchPerformance: {
+      totalQueries: number;
+      successfulQueries: number;
+      successRate: number;
+      averageResponseTime: number;
+      slowQueryRate: number;
+    };
+    evidenceQuality: {
+      excellentRate: number;  // >= 0.95
+      goodRate: number;       // 0.85-0.94
+      fairRate: number;       // 0.80-0.84
+      poorRate: number;       // < 0.80
+      noEvidenceRate: number;
+      averageMaxScore: number;
+      averageDocumentsFound: number;
+    };
+    searchTypes: {
+      similarity: number;
+      conversational: number;
+      direct: number;
+    };
+    queryComplexity: {
+      simple: number;
+      medium: number;
+      complex: number;
+    };
+    languageDistribution: Record<string, number>;
+    topKDistribution: Record<string, number>;
+  } {
+    const cutoff = Date.now() - timeWindowMs;
+    const recentRAG = this.ragMetrics.filter(m => m.timestamp > cutoff);
+    
+    if (recentRAG.length === 0) {
+      return {
+        searchPerformance: {
+          totalQueries: 0,
+          successfulQueries: 0,
+          successRate: 100,
+          averageResponseTime: 0,
+          slowQueryRate: 0
+        },
+        evidenceQuality: {
+          excellentRate: 0,
+          goodRate: 0,
+          fairRate: 0,
+          poorRate: 0,
+          noEvidenceRate: 0,
+          averageMaxScore: 0,
+          averageDocumentsFound: 0
+        },
+        searchTypes: { similarity: 0, conversational: 0, direct: 0 },
+        queryComplexity: { simple: 0, medium: 0, complex: 0 },
+        languageDistribution: {},
+        topKDistribution: {}
+      };
+    }
+    
+    // Search performance metrics
+    const successfulQueries = recentRAG.filter(m => m.hasEvidence);
+    const slowQueries = recentRAG.filter(m => m.duration > 2000);
+    const totalDuration = recentRAG.reduce((sum, m) => sum + m.duration, 0);
+    
+    // Evidence quality metrics
+    const scoreRanges = {
+      excellent: recentRAG.filter(m => m.maxScore >= 0.95),
+      good: recentRAG.filter(m => m.maxScore >= 0.85 && m.maxScore < 0.95),
+      fair: recentRAG.filter(m => m.maxScore >= 0.80 && m.maxScore < 0.85),
+      poor: recentRAG.filter(m => m.maxScore > 0 && m.maxScore < 0.80),
+      noEvidence: recentRAG.filter(m => !m.hasEvidence)
+    };
+    
+    const totalScore = recentRAG.reduce((sum, m) => sum + m.maxScore, 0);
+    const totalDocs = recentRAG.reduce((sum, m) => sum + m.documentsFound, 0);
+    
+    // Search type distribution
+    const searchTypes = { similarity: 0, conversational: 0, direct: 0 };
+    const queryComplexity = { simple: 0, medium: 0, complex: 0 };
+    const languageDistribution: Record<string, number> = {};
+    const topKDistribution: Record<string, number> = {};
+    
+    recentRAG.forEach(metric => {
+      // Search types
+      const searchType = metric.metadata?.searchType || 'similarity';
+      if (searchType in searchTypes) {
+        searchTypes[searchType as keyof typeof searchTypes]++;
+      }
+      
+      // Query complexity
+      const complexity = metric.metadata?.queryComplexity || 'medium';
+      if (complexity in queryComplexity) {
+        queryComplexity[complexity as keyof typeof queryComplexity]++;
+      }
+      
+      // Language distribution
+      const language = metric.metadata?.language || 'unknown';
+      languageDistribution[language] = (languageDistribution[language] || 0) + 1;
+      
+      // TopK distribution
+      const topK = (metric.metadata?.topK || 6).toString();
+      topKDistribution[topK] = (topKDistribution[topK] || 0) + 1;
+    });
+    
+    return {
+      searchPerformance: {
+        totalQueries: recentRAG.length,
+        successfulQueries: successfulQueries.length,
+        successRate: Math.round((successfulQueries.length / recentRAG.length) * 100),
+        averageResponseTime: Math.round(totalDuration / recentRAG.length),
+        slowQueryRate: Math.round((slowQueries.length / recentRAG.length) * 100)
+      },
+      evidenceQuality: {
+        excellentRate: Math.round((scoreRanges.excellent.length / recentRAG.length) * 100),
+        goodRate: Math.round((scoreRanges.good.length / recentRAG.length) * 100),
+        fairRate: Math.round((scoreRanges.fair.length / recentRAG.length) * 100),
+        poorRate: Math.round((scoreRanges.poor.length / recentRAG.length) * 100),
+        noEvidenceRate: Math.round((scoreRanges.noEvidence.length / recentRAG.length) * 100),
+        averageMaxScore: Math.round((totalScore / recentRAG.length) * 100) / 100,
+        averageDocumentsFound: Math.round(totalDocs / recentRAG.length)
+      },
+      searchTypes,
+      queryComplexity,
+      languageDistribution,
+      topKDistribution
+    };
+  }
 
   // Get conversation statistics
   getConversationStats(timeWindowMs: number = 60 * 60 * 1000): {
@@ -266,6 +460,93 @@ export class MetricsService {
       averageResponseTime: withDuration.length > 0 ? Math.round(totalDuration / withDuration.length) : 0,
       operationBreakdown,
       successRate: Math.round((successCount / recentConversations.length) * 100)
+    };
+  }
+
+  // Get detailed conversation memory monitoring
+  getConversationMemoryStats(timeWindowMs: number = 60 * 60 * 1000): {
+    activeSessions: number;
+    newSessions: number;
+    summariesGenerated: number;
+    summarySuccessRate: number;
+    averageSummaryLength: number;
+    memoryContextStats: {
+      averageTokens: number;
+      averageMessageCount: number;
+      memoryBuilds: number;
+    };
+    sessionActivity: {
+      totalSessions: number;
+      resets: number;
+      languageChanges: number;
+    };
+    messageStats: {
+      totalMessages: number;
+      userMessages: number;
+      assistantMessages: number;
+    };
+  } {
+    const cutoff = Date.now() - timeWindowMs;
+    const recentConversations = this.conversationMetrics.filter(m => m.timestamp > cutoff);
+    
+    // Session tracking
+    const sessionCreates = recentConversations.filter(m => m.operation === 'session-create');
+    const sessionResets = recentConversations.filter(m => m.operation === 'session-reset');
+    const languageUpdates = recentConversations.filter(m => m.operation === 'language-update');
+    
+    // Summary tracking
+    const summaryOperations = recentConversations.filter(m => m.operation === 'summary');
+    const successfulSummaries = summaryOperations.filter(m => m.success);
+    const summaryLengths = successfulSummaries
+      .map(m => m.metadata?.summaryLength)
+      .filter((length): length is number => length !== undefined);
+    
+    // Memory context tracking
+    const memoryBuilds = recentConversations.filter(m => m.operation === 'memory-build');
+    const memoryTokens = memoryBuilds
+      .map(m => m.metadata?.tokenCount)
+      .filter((count): count is number => count !== undefined);
+    const memoryMessageCounts = memoryBuilds
+      .map(m => m.metadata?.memoryContextSize)
+      .filter((count): count is number => count !== undefined);
+    
+    // Message tracking
+    const messageOperations = recentConversations.filter(m => m.operation === 'message');
+    const userMessages = messageOperations.filter(m => m.metadata?.messageRole === 'user');
+    const assistantMessages = messageOperations.filter(m => m.metadata?.messageRole === 'assistant');
+    
+    // Active sessions (unique chat IDs in recent activity)
+    const activeChatIds = new Set(recentConversations.map(m => m.chatId));
+    
+    return {
+      activeSessions: activeChatIds.size,
+      newSessions: sessionCreates.length,
+      summariesGenerated: successfulSummaries.length,
+      summarySuccessRate: summaryOperations.length > 0 
+        ? Math.round((successfulSummaries.length / summaryOperations.length) * 100) 
+        : 100,
+      averageSummaryLength: summaryLengths.length > 0 
+        ? Math.round(summaryLengths.reduce((sum, len) => sum + len, 0) / summaryLengths.length)
+        : 0,
+      memoryContextStats: {
+        averageTokens: memoryTokens.length > 0 
+          ? Math.round(memoryTokens.reduce((sum, tokens) => sum + tokens, 0) / memoryTokens.length)
+          : 0,
+        averageMessageCount: memoryMessageCounts.length > 0 
+          ? Math.round(memoryMessageCounts.reduce((sum, count) => sum + count, 0) / memoryMessageCounts.length)
+          : 0,
+        memoryBuilds: memoryBuilds.length
+      },
+      sessionActivity: {
+        totalSessions: activeChatIds.size,
+        resets: sessionResets.length,
+        languageChanges: languageUpdates.length
+      },
+      messageStats: {
+        totalMessages: messageOperations.length,
+        userMessages: userMessages.length,
+        assistantMessages: assistantMessages.length
+      }
     };
   }
 

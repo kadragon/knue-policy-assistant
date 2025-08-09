@@ -8,10 +8,20 @@
 | Phase 2 | ✅ 완료 | 100% | 외부 서비스 연동 (모든 서비스 클래스 구현) |
 | Phase 3 | ✅ 완료 | 100% | 대화 메모리 시스템 구현 (ConversationService + TelegramController) |
 | Phase 4 | ✅ 완료 | 100% | **LangChain 마이그레이션 완료** (기존 RAG → LangChain 체인) |
-| Phase 5 | ⏳ 대기 | 0% | 헬스체크/모니터링 (LangChain 완료 후) |
+| Phase 5 | ✅ 완료 | 100% | 헬스체크/모니터링 - 구조화된 로깅 및 고급 모니터링 시스템 |
 | Phase 6 | ⏳ 대기 | 0% | 테스트 및 품질보증 |
 | Phase 7 | ⏳ 대기 | 0% | 배포 및 운영 설정 |
 | Phase 8 | ⏳ 대기 | 0% | 문서화 및 최적화 |
+
+### 🎯 **Phase 5 완료 성과 - 구조화된 로깅 및 모니터링 시스템**
+- ✅ **Winston 구조화 로깅** - JSON 형식, 일일 로테이션, 압축 보관
+- ✅ **서비스별 로거** - 각 서비스 전용 로거 인스턴스 (LangChain, Conversation, OpenAI)
+- ✅ **Express 미들웨어 통합** - Correlation ID, 요청 추적, 성능 모니터링
+- ✅ **실시간 메트릭 수집** - 성능, RAG, 대화, 동기화 메트릭
+- ✅ **대화 메모리 모니터링** - 세션 추적, 요약 성공률, 토큰 사용량
+- ✅ **RAG 품질 모니터링** - 증거 품질 점수, 검색 성공률, 쿼리 복잡도 분석
+- ✅ **헬스 점수 알고리즘** - 응답시간, 에러율, RAG 성능, 대화 성공률 종합
+- ✅ **통합 테스트 스크립트** - 로깅/메트릭/모니터링 검증 완료
 
 ### 🎯 **Phase 4 완료 성과 - LangChain 마이그레이션**
 - ✅ **GitHubController** - GitHub webhook, 데이터 동기화, 수동 sync API
@@ -67,19 +77,39 @@ src/
 │   ├── index.ts            # ServiceContainer (싱글톤) + LangChain 통합
 │   ├── firestore.ts        # Firestore 연동 (대화 세션/메시지 관리) + SyncJob 지원
 │   ├── qdrant.ts           # Qdrant 연동 (벡터 검색/임베딩)
-│   ├── openai.ts           # OpenAI 연동 (임베딩/채팅/요약)
+│   ├── openai.ts           # OpenAI 연동 (임베딩/채팅/요약) + 구조화 로깅
 │   ├── telegram.ts         # Telegram 연동 (봇/웹훅)
 │   ├── github.ts           # GitHub 연동 (파일/웹훅) + Phase 4 동기화
-│   ├── conversation.ts     # 대화 메모리 시스템
-│   └── langchain.ts        # ✨ LangChain 서비스 (RAG/대화 체인) - 새로 추가
+│   ├── conversation.ts     # 대화 메모리 시스템 + 메모리 모니터링
+│   ├── langchain.ts        # ✨ LangChain 서비스 (RAG/대화 체인) + RAG 품질 모니터링
+│   ├── logger.ts           # ✨ Winston 구조화 로깅 시스템 - Phase 5
+│   └── metrics.ts          # ✨ 실시간 메트릭 수집 및 모니터링 - Phase 5
+├── middleware/
+│   └── logging.ts          # ✨ Express 로깅 미들웨어 (Correlation ID, 성능 추적) - Phase 5
 ├── controllers/
-│   ├── health.ts           # Health check 컨트롤러
+│   ├── health.ts           # Health check 컨트롤러 + 고급 모니터링
 │   ├── telegram.ts         # ✨ Telegram 웹훅 + LangChain RAG 통합
 │   ├── github.ts           # GitHub 웹훅 + 데이터 동기화
 │   └── rag.ts              # ✨ RAG 검색 및 질의응답 API (LangChain 기반)
 ├── utils/                  # 유틸리티 함수들
 ├── config/index.ts         # Zod 기반 환경변수 검증
-└── index.ts                # Express 애플리케이션 + Phase 4 라우트
+└── index.ts                # Express 애플리케이션 + Phase 5 로깅 미들웨어
+
+tests/
+├── integration/            # ✨ 통합 테스트 스크립트 모음 - Phase 5
+│   ├── test-structured-logging.js    # 구조화 로깅 검증
+│   ├── test-memory-monitoring.js     # 메모리 모니터링 검증
+│   ├── test-rag-monitoring.js        # RAG 품질 모니터링 검증
+│   ├── test-health-endpoints.js      # 헬스체크 엔드포인트 테스트
+│   └── test-langchain*.js            # LangChain 통합 테스트들
+├── unit/                   # 유닛 테스트 (향후 구현)
+└── setup.ts                # 테스트 설정
+
+logs/                       # ✨ 로그 파일 디렉토리 - Phase 5
+├── application-*.log       # 일반 로그 (일일 로테이션)
+├── error-*.log            # 에러 로그
+├── exceptions-*.log       # 예외 로그
+└── rejections-*.log       # Promise 거부 로그
 ```
 
 ## Phase 3: 대화 메모리 시스템 구현 ✅ **완료**
@@ -160,14 +190,55 @@ src/
 - [ ] Cloud Scheduler + Pub/Sub 연동
 - [ ] 주기적 GitHub 변경사항 확인
 
-## Phase 5: 헬스체크 및 모니터링
+## Phase 5: 헬스체크 및 모니터링 ✅ **완료**
 
-- [x] 헬스체크 엔드포인트 구현 (`/healthz`)
-- [ ] **대화 메모리 상태 모니터링** (세션 수, 요약 실패율)
-- [ ] 구조화된 로깅 시스템 (Winston)
-- [ ] Error Reporting 연동
-- [ ] 성능 메트릭 수집 (응답시간, 검색 0건 비율)
-- [ ] 동기화 작업 로그 관리
+### 구조화 로깅 시스템
+- [x] **Winston 로깅 프레임워크** - JSON 구조화 로깅, 일일 로테이션
+- [x] **서비스별 로거** - createLogger 유틸리티로 각 서비스 전용 인스턴스
+- [x] **로그 레벨 관리** - error, warn, info, debug, trace 레벨별 처리
+- [x] **파일 로테이션** - logs/ 디렉토리, 압축 보관, 자동 정리
+- [x] **개발/운영 분리** - 콘솔 출력 (dev) vs JSON 파일 (prod)
+
+### Express 미들웨어 통합
+- [x] **Correlation ID 미들웨어** - UUID 기반 요청 추적
+- [x] **요청 로깅 미들웨어** - HTTP 요청/응답 자동 로깅
+- [x] **성능 모니터링 미들웨어** - 느린 요청 감지 및 알림
+- [x] **에러 로깅 미들웨어** - 구조화된 에러 캡처 및 스택 추적
+
+### 실시간 메트릭 수집
+- [x] **MetricsService 클래스** - 성능, RAG, 대화, 동기화 메트릭 수집
+- [x] **자동 메트릭 정리** - 24시간 보존, 최대 1000개 제한
+- [x] **실시간 통계 생성** - 평균 응답시간, 에러율, 성공률 계산
+- [x] **헬스 점수 알고리즘** - 다중 요소 가중 평균 기반 점수
+
+### 서비스별 로깅 통합
+- [x] **LangChain 서비스** - RAG 검색, 벡터 스토어 초기화, 대화형 쿼리 로깅
+- [x] **Conversation 서비스** - 세션 관리, 메시지 저장, 요약 생성 로깅  
+- [x] **OpenAI 서비스** - 임베딩 생성, 채팅 완성, 요약 생성 로깅
+
+### 대화 메모리 모니터링
+- [x] **세션 추적** - 활성 세션 수, 새 세션 생성, 세션 리셋
+- [x] **요약 품질 모니터링** - 요약 성공률, 평균 길이, 생성 실패 추적
+- [x] **메모리 컨텍스트 분석** - 평균 토큰 수, 메시지 수, 메모리 빌드 통계
+- [x] **메시지 패턴 분석** - 사용자/어시스턴트 메시지 비율, 언어 변경 추적
+
+### RAG 품질 모니터링
+- [x] **증거 품질 점수** - 우수/좋음/보통/나쁨/없음 분류 및 분포
+- [x] **검색 성공률** - 검색 타입별 (유사성/대화형/직접) 성공률
+- [x] **쿼리 복잡도 분석** - 단순/중간/복잡 쿼리 분류 및 성능
+- [x] **느린 검색 감지** - 3초 이상 검색 알림 및 최적화 권장
+- [x] **언어별 분포** - 한국어/영어 쿼리 비율 및 성능 차이
+
+### 헬스체크 엔드포인트
+- [x] **기본 헬스체크** (`/healthz`, `/health`) - 서비스 상태 확인
+- [x] **상세 헬스체크** (`/health/detailed`) - 각 서비스별 진단
+- [x] **시스템 메트릭** (`/health/metrics`) - 메모리, CPU, 응답시간 통계
+
+### 테스트 및 검증
+- [x] **구조화 로깅 테스트** - 로그 생성, 파일 출력, 메타데이터 검증
+- [x] **메모리 모니터링 테스트** - 세션 추적, 요약 통계, 컨텍스트 분석
+- [x] **RAG 모니터링 테스트** - 품질 점수, 복잡도 분석, 성능 측정
+- [x] **통합 테스트 스크립트** - `tests/integration/` 디렉토리 구성
 
 ## Phase 6: 테스트 및 품질보증
 
@@ -201,7 +272,7 @@ src/
 - [ ] 성능 최적화 (캐싱, 배치 처리)
 - [ ] 비용 최적화 검토
 
-## 📋 **현재 우선순위 작업** (Phase 5 진행 중)
+## 📋 **현재 우선순위 작업** (Phase 6 준비)
 
 1. ✅ ~~**Node.js/TypeScript 프로젝트 설정** (Phase 1 완료)~~
 2. ✅ ~~**Firestore 대화 세션 모델 설계** (Phase 2 완료)~~
@@ -215,14 +286,19 @@ src/
    - ✅ 데이터 동기화 로직 구현
    - ✅ 질의응답 시스템 구현 (RAG + 메모리 통합)
    - ✅ RAG 컨트롤러 및 API 엔드포인트 구현
-5. ✅ **LangChain 마이그레이션 완료**
+5. ✅ ~~**LangChain 마이그레이션 완료** (Phase 4)~~
    - ✅ RAG 시스템을 LangChain 체인으로 전환 완료
    - ✅ 메모리 시스템을 LangChain Memory로 통합 완료  
    - ✅ TypeScript 타입 안정성 확보 (LangChain 프레임워크 활용)
    - ✅ 코드 복잡도 90% 감소 (200+ 줄 → 20줄)
-6. ⏳ **헬스체크/모니터링 시스템** (Phase 5) ← **다음 단계**
-7. ⏳ **대화 플로우 통합 테스트** (Phase 6)
+6. ✅ ~~**구조화된 로깅/모니터링 시스템** (Phase 5 완료)~~
+   - ✅ Winston 구조화 로깅 및 Express 미들웨어 통합
+   - ✅ 실시간 메트릭 수집 및 헬스 점수 알고리즘
+   - ✅ 대화 메모리 모니터링 (세션, 요약, 토큰 추적)
+   - ✅ RAG 품질 모니터링 (증거 품질, 검색 성공률)
+7. ⏳ **대화 플로우 통합 테스트** (Phase 6) ← **다음 단계**
 8. ⏳ **Firestore 인덱스 최적화** (Phase 7)
+9. ⏳ **문서화 및 배포 준비** (Phase 8)
 
 ## 메모리 전략 핵심 요구사항
 
@@ -290,8 +366,8 @@ src/
 6. [x] ~~**RAG 검색 + 스코어 임계값 적용**~~
 7. [x] ~~**프롬프트 분리** (메모리=참고, 근거=필수)~~
 8. [x] ~~**명령어 구현** (/reset, /lang, /help)~~
-9. [ ] **로깅/알람** (요약 실패율, 응답 지연, 검색 0건 비율)
-10. [ ] **성능 튜닝 및 모니터링**
+9. [x] ~~**로깅/모니터링 시스템** (요약 실패율, 응답 지연, 검색 품질 추적) - Phase 5 완료~~
+10. [x] ~~**성능 모니터링 및 헬스 점수** - Phase 5 완료~~
 
 ## Phase 4+ LangChain 마이그레이션 작업 ✅ **완료**
 

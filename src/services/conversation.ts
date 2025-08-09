@@ -10,6 +10,11 @@ import { ServiceError } from '../types';
 import { FirestoreService } from './firestore';
 import { OpenAIService } from './openai';
 import { DateUtils, TextUtils } from '../utils';
+import { createLogger } from './logger';
+import { metricsService } from './metrics';
+
+// 대화 서비스 전용 로거
+const logger = createLogger('conversation-service');
 
 /**
  * 대화 메모리 시스템을 관리하는 서비스
@@ -32,7 +37,14 @@ export class ConversationService {
    * 세션이 없으면 새로 생성하고, 있으면 기존 세션 반환
    */
   async initializeSession(chatId: string, lang: Language = DEFAULT_VALUES.LANG): Promise<Conversation> {
+    const startTime = Date.now();
+    
     try {
+      logger.info('session-init', `Initializing session for ${chatId}`, {
+        chatId,
+        lang
+      });
+      
       let conversation = await this.firestoreService.getConversation(chatId);
       
       if (!conversation) {
@@ -47,11 +59,58 @@ export class ConversationService {
         };
         
         await this.firestoreService.saveConversation(conversation);
-        console.log(`Created new conversation session for ${chatId}`);
+        
+        const duration = Date.now() - startTime;
+        logger.logConversationOperation(
+          'session-created',
+          chatId,
+          0,
+          duration,
+          { lang, newSession: true }
+        );
+        
+        metricsService.recordConversation({
+          chatId,
+          operation: 'session-create',
+          messageCount: 0,
+          duration,
+          success: true,
+          metadata: {
+            languageChanged: false,
+            sessionActive: true
+          }
+        });
+      } else {
+        const duration = Date.now() - startTime;
+        logger.logConversationOperation(
+          'session-retrieved',
+          chatId,
+          conversation.messageCount || 0,
+          duration,
+          { lang: conversation.lang, existingSession: true }
+        );
       }
       
       return conversation;
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('session-init-error', `Failed to initialize session for ${chatId}`, error as Error, {
+        chatId,
+        lang,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'session-create',
+        messageCount: 0,
+        duration,
+        success: false,
+        metadata: {
+          sessionActive: false
+        }
+      });
+      
       throw new ServiceError(
         'Failed to initialize conversation session',
         'conversation',
@@ -67,7 +126,16 @@ export class ConversationService {
    * 저장 후 자동으로 요약 트리거 조건을 확인
    */
   async saveMessage(chatId: string, role: MessageRole, text: string, metadata?: any): Promise<void> {
+    const startTime = Date.now();
+    
     try {
+      logger.debug('message-save-start', `Saving ${role} message for ${chatId}`, {
+        chatId,
+        role,
+        textLength: text.length,
+        hasMetadata: !!metadata
+      });
+      
       const message: Message = {
         messageId: '', // FirestoreService에서 설정됨
         chatId,
@@ -78,13 +146,55 @@ export class ConversationService {
       };
 
       await this.firestoreService.saveMessage(message);
-      console.log(`Saved ${role} message for ${chatId}: ${TextUtils.truncate(text, 100)}`);
+      
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'message-saved',
+        chatId,
+        1,
+        duration,
+        {
+          role,
+          textLength: text.length,
+          messagePreview: TextUtils.truncate(text, 100)
+        }
+      );
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'message',
+        messageCount: 1,
+        duration,
+        success: true,
+        metadata: {
+          messageRole: role
+        }
+      });
       
       // 요약 트리거 확인 및 실행
       if (await this.shouldTriggerSummary(chatId)) {
         await this.generateAndSaveSummary(chatId);
       }
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('message-save-error', `Failed to save ${role} message for ${chatId}`, error as Error, {
+        chatId,
+        role,
+        textLength: text.length,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'message',
+        messageCount: 1,
+        duration,
+        success: false,
+        metadata: {
+          messageRole: role
+        }
+      });
+      
       throw new ServiceError(
         'Failed to save message',
         'conversation',
@@ -99,9 +209,34 @@ export class ConversationService {
    * 최근 메시지 조회 (LangChain 대화 메모리용)
    */
   async getRecentMessages(chatId: string, limit: number = 10): Promise<Message[]> {
+    const startTime = Date.now();
+    
     try {
-      return await this.firestoreService.getRecentMessages(chatId, limit);
+      logger.debug('messages-fetch', `Fetching ${limit} recent messages for ${chatId}`, {
+        chatId,
+        limit
+      });
+      
+      const messages = await this.firestoreService.getRecentMessages(chatId, limit);
+      
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'messages-retrieved',
+        chatId,
+        messages.length,
+        duration,
+        { requestedLimit: limit, actualCount: messages.length }
+      );
+      
+      return messages;
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('messages-fetch-error', `Failed to get recent messages for ${chatId}`, error as Error, {
+        chatId,
+        limit,
+        duration
+      });
+      
       throw new ServiceError(
         'Failed to get recent messages',
         'conversation',
@@ -121,18 +256,44 @@ export class ConversationService {
     recentMessages: Message[];
     summary?: string;
   }> {
+    const startTime = Date.now();
+    
     try {
+      logger.debug('context-load', `Loading conversation context for ${chatId}`, {
+        chatId,
+        maxRecentMessages: DEFAULT_VALUES.MAX_RECENT_MESSAGES
+      });
+      
       const [conversation, recentMessages] = await Promise.all([
         this.firestoreService.getConversation(chatId),
         this.firestoreService.getRecentMessages(chatId, DEFAULT_VALUES.MAX_RECENT_MESSAGES)
       ]);
 
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'context-loaded',
+        chatId,
+        recentMessages.length,
+        duration,
+        {
+          hasConversation: !!conversation,
+          hasSummary: !!conversation?.summary,
+          summaryLength: conversation?.summary?.length || 0
+        }
+      );
+      
       return {
         conversation,
         recentMessages,
         summary: conversation?.summary
       };
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('context-load-error', `Failed to load conversation context for ${chatId}`, error as Error, {
+        chatId,
+        duration
+      });
+      
       throw new ServiceError(
         'Failed to load conversation context',
         'conversation',
@@ -148,10 +309,46 @@ export class ConversationService {
    * 모든 메시지와 요약을 삭제하고 세션을 초기화
    */
   async resetSession(chatId: string): Promise<void> {
+    const startTime = Date.now();
+    
     try {
+      logger.info('session-reset', `Resetting conversation session for ${chatId}`, {
+        chatId
+      });
+      
       await this.firestoreService.resetConversation(chatId);
-      console.log(`Reset conversation session for ${chatId}`);
+      
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'session-reset',
+        chatId,
+        0,
+        duration,
+        { resetComplete: true }
+      );
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'session-reset',
+        messageCount: 0,
+        duration,
+        success: true
+      });
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('session-reset-error', `Failed to reset session for ${chatId}`, error as Error, {
+        chatId,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'session-reset',
+        messageCount: 0,
+        duration,
+        success: false
+      });
+      
       throw new ServiceError(
         'Failed to reset conversation session',
         'conversation',
@@ -166,7 +363,14 @@ export class ConversationService {
    * 언어 설정 변경 (/lang 명령어)
    */
   async updateLanguage(chatId: string, lang: Language): Promise<void> {
+    const startTime = Date.now();
+    
     try {
+      logger.info('language-update', `Updating language to ${lang} for ${chatId}`, {
+        chatId,
+        newLang: lang
+      });
+      
       const conversation = await this.firestoreService.getConversation(chatId);
       if (!conversation) {
         // 새 세션 생성
@@ -174,12 +378,43 @@ export class ConversationService {
         return;
       }
 
+      const oldLang = conversation.lang;
       conversation.lang = lang;
       conversation.updatedAt = Timestamp.now();
       await this.firestoreService.saveConversation(conversation);
       
-      console.log(`Updated language to ${lang} for ${chatId}`);
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'language-updated',
+        chatId,
+        conversation.messageCount || 0,
+        duration,
+        { oldLang, newLang: lang }
+      );
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'language-update',
+        messageCount: 0,
+        duration,
+        success: true
+      });
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('language-update-error', `Failed to update language for ${chatId}`, error as Error, {
+        chatId,
+        lang,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'language-update',
+        messageCount: 0,
+        duration,
+        success: false
+      });
+      
       throw new ServiceError(
         'Failed to update language setting',
         'conversation',
@@ -197,10 +432,20 @@ export class ConversationService {
    */
   private async shouldTriggerSummary(chatId: string): Promise<boolean> {
     try {
-      return await this.firestoreService.shouldTriggerSummary(chatId);
+      const shouldTrigger = await this.firestoreService.shouldTriggerSummary(chatId);
+      
+      logger.debug('summary-trigger-check', `Summary trigger check for ${chatId}: ${shouldTrigger}`, {
+        chatId,
+        shouldTrigger
+      });
+      
+      return shouldTrigger;
     } catch (error) {
       // 요약 트리거 확인 실패 시 로그만 남기고 진행
-      console.warn(`Failed to check summary trigger for ${chatId}:`, error);
+      logger.warn('summary-trigger-check-error', `Failed to check summary trigger for ${chatId}`, {
+        chatId,
+        error: (error as Error).message
+      });
       return false;
     }
   }
@@ -210,18 +455,29 @@ export class ConversationService {
    * OpenAI를 사용하여 rolling summary 생성
    */
   private async generateAndSaveSummary(chatId: string): Promise<void> {
+    const startTime = Date.now();
+    
     try {
+      logger.info('summary-generation', `Starting summary generation for ${chatId}`, {
+        chatId
+      });
+      
       const recentMessages = await this.firestoreService.getRecentMessages(
         chatId, 
         DEFAULT_VALUES.SUMMARY_TRIGGER_MESSAGES
       );
 
       if (recentMessages.length === 0) {
-        console.log(`No messages to summarize for ${chatId}`);
+        logger.debug('summary-skip', `No messages to summarize for ${chatId}`, {
+          chatId
+        });
         return;
       }
 
-      console.log(`Generating summary for ${chatId} with ${recentMessages.length} messages...`);
+      logger.debug('summary-messages-loaded', `Loaded ${recentMessages.length} messages for summary`, {
+        chatId,
+        messageCount: recentMessages.length
+      });
 
       // OpenAI를 사용하여 요약 생성
       const summary = await this.openaiService.generateSummary(recentMessages);
@@ -229,10 +485,47 @@ export class ConversationService {
       // 요약을 Firestore에 저장
       await this.firestoreService.updateConversationSummary(chatId, summary);
 
-      console.log(`Generated summary for ${chatId}: ${TextUtils.truncate(summary, 100)}`);
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'summary-generated',
+        chatId,
+        recentMessages.length,
+        duration,
+        {
+          summaryLength: summary.length,
+          summaryPreview: TextUtils.truncate(summary, 100)
+        }
+      );
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'summary',
+        messageCount: recentMessages.length,
+        duration,
+        success: true,
+        metadata: {
+          summaryLength: summary.length,
+          summaryGenerated: true
+        }
+      });
     } catch (error) {
       // 요약 생성 실패 시 기존 요약 유지하고 로그만 남김
-      console.error(`Failed to generate summary for ${chatId}:`, error);
+      const duration = Date.now() - startTime;
+      logger.error('summary-generation-error', `Failed to generate summary for ${chatId}`, error as Error, {
+        chatId,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'summary',
+        messageCount: 0,
+        duration,
+        success: false,
+        metadata: {
+          summaryGenerated: false
+        }
+      });
     }
   }
 
@@ -276,7 +569,14 @@ export class ConversationService {
     recentMessages: Message[];
     tokenCount: number;
   }> {
+    const startTime = Date.now();
+    
     try {
+      logger.debug('memory-context-build', `Building memory context for ${chatId}`, {
+        chatId,
+        maxTokens
+      });
+      
       const context = await this.loadConversationContext(chatId);
       
       let tokenCount = 0;
@@ -303,7 +603,34 @@ export class ConversationService {
         tokenCount += messageTokens;
       }
 
-      console.log(`Built memory context for ${chatId}: ${tokenCount} tokens (${selectedMessages.length} messages)`);
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'memory-context-built',
+        chatId,
+        selectedMessages.length,
+        duration,
+        {
+          totalTokens: tokenCount,
+          maxTokens,
+          summaryTokens: summary ? this.openaiService.estimateTokens(summary) : 0,
+          messageTokens: tokenCount - (summary ? this.openaiService.estimateTokens(summary) : 0),
+          totalAvailableMessages: context.recentMessages.length,
+          selectedMessageCount: selectedMessages.length
+        }
+      );
+
+      // Record memory context metrics
+      metricsService.recordConversation({
+        chatId,
+        operation: 'memory-build',
+        messageCount: selectedMessages.length,
+        duration,
+        success: true,
+        metadata: {
+          tokenCount,
+          memoryContextSize: selectedMessages.length
+        }
+      });
 
       return {
         summary,
@@ -311,6 +638,13 @@ export class ConversationService {
         tokenCount
       };
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('memory-context-build-error', `Failed to build memory context for ${chatId}`, error as Error, {
+        chatId,
+        maxTokens,
+        duration
+      });
+      
       throw new ServiceError(
         'Failed to build memory context',
         'conversation',
@@ -326,15 +660,54 @@ export class ConversationService {
    * /force-summary 등의 관리자 명령어에서 사용
    */
   async forceSummaryGeneration(chatId: string): Promise<string> {
+    const startTime = Date.now();
+    
     try {
+      logger.info('force-summary', `Forcing summary generation for ${chatId}`, {
+        chatId
+      });
+      
       await this.generateAndSaveSummary(chatId);
       
       const conversation = await this.firestoreService.getConversation(chatId);
       const summary = conversation?.summary || 'No summary generated';
       
-      console.log(`Forced summary generation for ${chatId}`);
+      const duration = Date.now() - startTime;
+      logger.logConversationOperation(
+        'force-summary-completed',
+        chatId,
+        0,
+        duration,
+        {
+          summaryGenerated: !!conversation?.summary,
+          summaryLength: summary.length
+        }
+      );
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'force-summary',
+        messageCount: 0,
+        duration,
+        success: true
+      });
+      
       return summary;
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('force-summary-error', `Failed to force summary generation for ${chatId}`, error as Error, {
+        chatId,
+        duration
+      });
+      
+      metricsService.recordConversation({
+        chatId,
+        operation: 'force-summary',
+        messageCount: 0,
+        duration,
+        success: false
+      });
+      
       throw new ServiceError(
         'Failed to force summary generation',
         'conversation',
@@ -357,12 +730,21 @@ export class ConversationService {
       // 현재 설정된 언어와 다르면 업데이트
       if (conversation && conversation.lang !== detectedLang) {
         await this.updateLanguage(chatId, detectedLang);
-        console.log(`Auto-detected and updated language to ${detectedLang} for ${chatId}`);
+        logger.info('language-auto-detected', `Auto-detected and updated language to ${detectedLang} for ${chatId}`, {
+          chatId,
+          oldLang: conversation.lang,
+          detectedLang,
+          textSample: text.substring(0, 50) + (text.length > 50 ? '...' : '')
+        });
       }
       
       return detectedLang;
     } catch (error) {
-      console.warn(`Failed to detect/update language for ${chatId}:`, error);
+      logger.warn('language-detect-error', `Failed to detect/update language for ${chatId}`, {
+        chatId,
+        error: (error as Error).message,
+        textLength: text.length
+      });
       return DEFAULT_VALUES.LANG;
     }
   }
@@ -374,16 +756,35 @@ export class ConversationService {
   async isSessionActive(chatId: string, maxIdleHours: number = 24): Promise<boolean> {
     try {
       const conversation = await this.firestoreService.getConversation(chatId);
-      if (!conversation) return false;
+      if (!conversation) {
+        logger.debug('session-activity-check', `No conversation found for ${chatId}`, {
+          chatId,
+          maxIdleHours
+        });
+        return false;
+      }
       
       const now = Date.now();
       const lastMessageTime = conversation.lastMessageAt.toMillis();
       const idleTime = now - lastMessageTime;
       const maxIdleTime = maxIdleHours * 60 * 60 * 1000; // hours to milliseconds
+      const isActive = idleTime < maxIdleTime;
       
-      return idleTime < maxIdleTime;
+      logger.debug('session-activity-check', `Session activity check for ${chatId}: ${isActive}`, {
+        chatId,
+        isActive,
+        idleTimeHours: Math.round(idleTime / (60 * 60 * 1000) * 100) / 100,
+        maxIdleHours,
+        lastMessageTime: new Date(lastMessageTime).toISOString()
+      });
+      
+      return isActive;
     } catch (error) {
-      console.warn(`Failed to check session activity for ${chatId}:`, error);
+      logger.warn('session-activity-check-error', `Failed to check session activity for ${chatId}`, {
+        chatId,
+        maxIdleHours,
+        error: (error as Error).message
+      });
       return false;
     }
   }

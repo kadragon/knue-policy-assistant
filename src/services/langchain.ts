@@ -20,14 +20,11 @@ import type {
   Message,
 } from '../types/index.js';
 import { appConfig } from '../config/index.js';
-// import { logger } from '../utils/logger.js';
+import { createLogger } from './logger';
+import { metricsService } from './metrics';
 
-// 임시 로거 (실제 logger 파일 없음)
-const logger = {
-  info: (msg: string, ...args: any[]) => console.log(`[INFO] ${msg}`, ...args),
-  error: (msg: string, ...args: any[]) => console.error(`[ERROR] ${msg}`, ...args),
-  warn: (msg: string, ...args: any[]) => console.warn(`[WARN] ${msg}`, ...args),
-};
+// LangChain 서비스 전용 로거
+const logger = createLogger('langchain-service');
 
 export class LangChainService {
   private llm: ChatOpenAI;
@@ -52,13 +49,19 @@ export class LangChainService {
       modelName: 'text-embedding-3-small',
     });
 
-    logger.info('LangChainService initialized');
+    logger.info('langchain-initialization', 'LangChainService initialized', {
+      modelName: 'gpt-4-turbo-preview',
+      embeddingModel: 'text-embedding-3-small',
+      temperature: 0
+    });
   }
 
   /**
    * Qdrant 벡터 스토어 초기화
    */
   async initializeVectorStore(): Promise<void> {
+    const startTime = Date.now();
+    
     try {
       this.vectorStore = await QdrantVectorStore.fromExistingCollection(
         this.embeddings,
@@ -69,9 +72,37 @@ export class LangChainService {
         }
       );
 
-      logger.info('Qdrant vector store initialized');
+      const duration = Date.now() - startTime;
+      logger.logPerformance('vector-store-init', duration, {
+        collectionName: appConfig.COLLECTION_NAME,
+        qdrantUrl: appConfig.QDRANT_URL
+      });
+
+      // Record successful initialization metric
+      metricsService.recordPerformance({
+        operation: 'vector-store-init',
+        service: 'langchain',
+        duration,
+        success: true,
+        metadata: { collectionName: appConfig.COLLECTION_NAME }
+      });
+
     } catch (error) {
-      logger.error('Failed to initialize vector store:', error);
+      const duration = Date.now() - startTime;
+      logger.error('vector-store-init', 'Failed to initialize vector store', error as Error, {
+        duration,
+        collectionName: appConfig.COLLECTION_NAME
+      });
+
+      // Record failed initialization metric
+      metricsService.recordPerformance({
+        operation: 'vector-store-init',
+        service: 'langchain',
+        duration,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+
       throw error;
     }
   }
@@ -104,10 +135,19 @@ export class LangChainService {
    * RAG 검색 수행
    */
   async search(request: RAGSearchRequest): Promise<RAGSearchResponse> {
+    const startTime = Date.now();
+    
     try {
       if (!this.vectorStore) {
         await this.initializeVectorStore();
       }
+
+      logger.info('rag-search-start', 'Starting RAG search', {
+        query: request.query.substring(0, 100) + (request.query.length > 100 ? '...' : ''),
+        k: request.k || 6,
+        minScore: request.minScore || 0.80,
+        lang: request.lang
+      });
 
       const filter = request.lang ? {
         must: [{ key: 'lang', match: { value: request.lang } }]
@@ -131,6 +171,68 @@ export class LangChainService {
           seq: doc.metadata['seq'] || 0,
         }));
 
+      const duration = Date.now() - startTime;
+      const maxScore = documents.length > 0 ? Math.max(...documents.map(d => d.score)) : 0;
+      const hasEvidence = documents.length > 0;
+
+      // Log RAG search results
+      logger.logRAGOperation(
+        'rag-search',
+        request.query,
+        documents.length,
+        maxScore,
+        hasEvidence,
+        duration,
+        undefined, // chatId not available in search
+        {
+          k: request.k || 6,
+          minScore: request.minScore || 0.80,
+          lang: request.lang
+        }
+      );
+
+      // Analyze search quality for enhanced monitoring
+      const scoreDistribution = {
+        excellent: documents.filter(d => d.score >= 0.95).length,
+        good: documents.filter(d => d.score >= 0.85 && d.score < 0.95).length,
+        fair: documents.filter(d => d.score >= 0.80 && d.score < 0.85).length,
+        poor: documents.filter(d => d.score > 0 && d.score < 0.80).length
+      };
+      
+      const averageScore = documents.length > 0 
+        ? documents.reduce((sum, d) => sum + d.score, 0) / documents.length 
+        : 0;
+        
+      const evidenceQuality = maxScore >= 0.95 ? 'high' 
+        : maxScore >= 0.85 ? 'medium' 
+        : maxScore >= 0.80 ? 'low' 
+        : 'none';
+        
+      const queryComplexity = request.query.length > 100 ? 'complex'
+        : request.query.split(' ').length > 10 ? 'medium'
+        : 'simple';
+      
+      // Record enhanced RAG metrics
+      metricsService.recordRAG({
+        query: request.query,
+        documentsFound: documents.length,
+        maxScore,
+        hasEvidence,
+        duration,
+        chatId: undefined,
+        metadata: {
+          searchType: 'similarity',
+          minScoreThreshold: request.minScore || 0.80,
+          topK: request.k || 6,
+          language: request.lang,
+          totalCandidates: results.length,
+          averageScore: Math.round(averageScore * 100) / 100,
+          scoreDistribution,
+          queryComplexity,
+          evidenceQuality
+        }
+      });
+
       return {
         documents,
         query: request.query,
@@ -138,7 +240,39 @@ export class LangChainService {
         ...(request.lang && { lang: request.lang }),
       };
     } catch (error) {
-      logger.error('LangChain search failed:', error);
+      const duration = Date.now() - startTime;
+      logger.error('rag-search-error', 'LangChain search failed', error as Error, {
+        query: request.query.substring(0, 100),
+        duration,
+        k: request.k,
+        lang: request.lang
+      });
+
+      // Record failed search metric with context
+      const queryComplexity = request.query.length > 100 ? 'complex'
+        : request.query.split(' ').length > 10 ? 'medium'
+        : 'simple';
+      
+      metricsService.recordRAG({
+        query: request.query,
+        documentsFound: 0,
+        maxScore: 0,
+        hasEvidence: false,
+        duration,
+        chatId: undefined,
+        metadata: {
+          searchType: 'similarity',
+          minScoreThreshold: request.minScore || 0.80,
+          topK: request.k || 6,
+          language: request.lang,
+          totalCandidates: 0,
+          averageScore: 0,
+          scoreDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+          queryComplexity,
+          evidenceQuality: 'none'
+        }
+      });
+
       throw error;
     }
   }
@@ -224,10 +358,18 @@ ${context}
     chatHistory: Message[],
     lang: Language = 'ko'
   ): Promise<RAGQueryResponse> {
+    const startTime = Date.now();
+    
     try {
       if (!this.vectorStore) {
         await this.initializeVectorStore();
       }
+
+      logger.info('conversational-rag-start', 'Starting conversational RAG query', {
+        question: question.substring(0, 100) + (question.length > 100 ? '...' : ''),
+        chatHistoryLength: chatHistory.length,
+        lang
+      });
 
       // 1. 대화 기록을 요약하여 컨텍스트 생성
       let conversationContext = '';
@@ -293,15 +435,108 @@ ${context}
         url: doc.metadata['url'] || '',
       }));
 
+      const duration = Date.now() - startTime;
+      const maxScore = Math.max(...relevantDocs.map(([, score]) => score));
+
+      // Log successful conversational RAG
+      logger.logRAGOperation(
+        'conversational-rag',
+        question,
+        relevantDocs.length,
+        maxScore,
+        true,
+        duration,
+        undefined, // chatId will be provided by calling service
+        {
+          chatHistoryLength: chatHistory.length,
+          sourcesFound: sources.length,
+          lang,
+          answerLength: (result.content as string).length
+        }
+      );
+
+      // Analyze conversational search quality
+      const scores = relevantDocs.map(([, score]) => score);
+      const averageScore = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+      
+      const scoreDistribution = {
+        excellent: scores.filter(s => s >= 0.95).length,
+        good: scores.filter(s => s >= 0.85 && s < 0.95).length,
+        fair: scores.filter(s => s >= 0.80 && s < 0.85).length,
+        poor: scores.filter(s => s > 0 && s < 0.80).length
+      };
+      
+      const evidenceQuality = maxScore >= 0.95 ? 'high' 
+        : maxScore >= 0.85 ? 'medium' 
+        : maxScore >= 0.80 ? 'low' 
+        : 'none';
+        
+      const queryComplexity = question.length > 100 ? 'complex'
+        : question.split(' ').length > 10 ? 'medium'
+        : 'simple';
+      
+      // Record enhanced conversational RAG metrics
+      metricsService.recordRAG({
+        query: question,
+        documentsFound: relevantDocs.length,
+        maxScore,
+        hasEvidence: true,
+        duration,
+        chatId: undefined,
+        metadata: {
+          searchType: 'conversational',
+          minScoreThreshold: 0.80,
+          topK: 6,
+          language: lang,
+          totalCandidates: searchResults.length,
+          averageScore: Math.round(averageScore * 100) / 100,
+          scoreDistribution,
+          queryComplexity,
+          evidenceQuality
+        }
+      });
+
       return {
         answer: result.content as string,
         sources,
         question,
         lang,
-        processingTime: 0,
+        processingTime: duration,
       };
     } catch (error) {
-      logger.error('LangChain conversational query failed:', error);
+      const duration = Date.now() - startTime;
+      logger.error('conversational-rag-error', 'LangChain conversational query failed', error as Error, {
+        question: question.substring(0, 100),
+        chatHistoryLength: chatHistory.length,
+        duration,
+        lang
+      });
+
+      // Record failed conversational query with context
+      const queryComplexity = question.length > 100 ? 'complex'
+        : question.split(' ').length > 10 ? 'medium'
+        : 'simple';
+      
+      metricsService.recordRAG({
+        query: question,
+        documentsFound: 0,
+        maxScore: 0,
+        hasEvidence: false,
+        duration,
+        chatId: undefined,
+        metadata: {
+          searchType: 'conversational',
+          minScoreThreshold: 0.80,
+          topK: 6,
+          language: lang,
+          totalCandidates: 0,
+          averageScore: 0,
+          scoreDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
+          queryComplexity,
+          evidenceQuality: 'none'
+        }
+      });
+
       throw error;
     }
   }

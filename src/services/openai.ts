@@ -1,6 +1,5 @@
 import OpenAI from 'openai';
 import { 
-  EmbeddingResponse, 
   ChatContext, 
   Message,
   Language,
@@ -8,6 +7,11 @@ import {
 } from '../types';
 import { ServiceError } from '../types';
 import { appConfig } from '../config';
+import { createLogger } from './logger';
+import { metricsService } from './metrics';
+
+// OpenAI 서비스 전용 로거
+const logger = createLogger('openai-service');
 
 export class OpenAIService {
   private client: OpenAI;
@@ -26,9 +30,17 @@ export class OpenAIService {
   }
 
   async createEmbedding(text: string): Promise<number[]> {
+    const startTime = Date.now();
+    
     try {
       // Truncate text if it's too long for embedding model
       const truncatedText = this.truncateText(text, this.maxTokens.embedding);
+      
+      logger.debug('embedding-create', 'Creating single embedding', {
+        originalLength: text.length,
+        truncatedLength: truncatedText.length,
+        model: this.embeddingModel
+      });
       
       const response = await this.client.embeddings.create({
         model: this.embeddingModel,
@@ -36,8 +48,41 @@ export class OpenAIService {
         encoding_format: 'float'
       });
 
-      return response.data[0].embedding;
+      const duration = Date.now() - startTime;
+      const embedding = response.data[0].embedding;
+      
+      logger.logPerformance('embedding-create', duration, {
+        model: this.embeddingModel,
+        inputLength: truncatedText.length,
+        embeddingDimensions: embedding.length,
+        tokensUsed: response.usage?.total_tokens
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'embedding-create',
+        service: 'openai',
+        duration,
+        success: true,
+        metadata: { embeddingDimensions: embedding.length }
+      });
+
+      return embedding;
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('embedding-create-error', 'Failed to create embedding', error as Error, {
+        textLength: text.length,
+        model: this.embeddingModel,
+        duration
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'embedding-create',
+        service: 'openai',
+        duration,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
       throw new ServiceError(
         'Failed to create embedding',
         'openai',
@@ -49,12 +94,24 @@ export class OpenAIService {
   }
 
   async createEmbeddings(texts: string[]): Promise<number[][]> {
+    const startTime = Date.now();
+    
     try {
       // Process in batches to avoid rate limits
       const batchSize = DEFAULT_VALUES.EMBEDDING_BATCH_SIZE;
       const embeddings: number[][] = [];
+      const totalBatches = Math.ceil(texts.length / batchSize);
+
+      logger.info('batch-embedding-start', `Creating embeddings for ${texts.length} texts in ${totalBatches} batches`, {
+        totalTexts: texts.length,
+        batchSize,
+        totalBatches,
+        model: this.embeddingModel
+      });
 
       for (let i = 0; i < texts.length; i += batchSize) {
+        const batchStartTime = Date.now();
+        const batchIndex = Math.floor(i / batchSize) + 1;
         const batch = texts.slice(i, i + batchSize);
         const truncatedBatch = batch.map(text => this.truncateText(text, this.maxTokens.embedding));
 
@@ -66,14 +123,58 @@ export class OpenAIService {
 
         embeddings.push(...response.data.map(item => item.embedding));
         
+        const batchDuration = Date.now() - batchStartTime;
+        logger.debug('batch-embedding-progress', `Completed batch ${batchIndex}/${totalBatches}`, {
+          batchIndex,
+          totalBatches,
+          batchSize: batch.length,
+          batchDuration,
+          tokensUsed: response.usage?.total_tokens
+        });
+        
         // Add delay between batches to respect rate limits
         if (i + batchSize < texts.length) {
           await this.delay(100);
         }
       }
 
+      const duration = Date.now() - startTime;
+      logger.logPerformance('batch-embedding-complete', duration, {
+        totalTexts: texts.length,
+        totalBatches,
+        embeddingsCreated: embeddings.length,
+        averageTimePerBatch: Math.round(duration / totalBatches)
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'batch-embedding-create',
+        service: 'openai',
+        duration,
+        success: true,
+        metadata: { 
+          totalTexts: texts.length, 
+          batchCount: totalBatches,
+          embeddingsCreated: embeddings.length
+        }
+      });
+
       return embeddings;
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('batch-embedding-error', 'Failed to create batch embeddings', error as Error, {
+        totalTexts: texts.length,
+        batchSize: DEFAULT_VALUES.EMBEDDING_BATCH_SIZE,
+        duration
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'batch-embedding-create',
+        service: 'openai',
+        duration,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
       throw new ServiceError(
         'Failed to create batch embeddings',
         'openai',
@@ -85,6 +186,8 @@ export class OpenAIService {
   }
 
   async generateChatCompletion(context: ChatContext): Promise<string> {
+    const startTime = Date.now();
+    
     try {
       const messages: OpenAI.ChatCompletionMessageParam[] = [
         {
@@ -102,9 +205,10 @@ export class OpenAIService {
       }
 
       // Add recent messages (conversation context)
+      let truncatedMessages: Message[] = [];
       if (context.recentMessages && context.recentMessages.length > 0) {
         // Truncate messages if they exceed memory token limit
-        const truncatedMessages = this.truncateMessages(context.recentMessages, this.maxTokens.memory);
+        truncatedMessages = this.truncateMessages(context.recentMessages, this.maxTokens.memory);
         
         for (const msg of truncatedMessages) {
           messages.push({
@@ -122,6 +226,18 @@ export class OpenAIService {
         });
       }
 
+      logger.debug('chat-completion-start', 'Generating chat completion', {
+        model: this.chatModel,
+        messageCount: messages.length,
+        hasConversationSummary: !!context.conversationSummary,
+        recentMessageCount: context.recentMessages?.length || 0,
+        truncatedMessageCount: truncatedMessages.length,
+        hasRAGContext: !!context.ragContext,
+        ragContextLength: context.ragContext?.length || 0,
+        maxTokens: context.maxTokens || this.maxTokens.chat,
+        temperature: context.temperature || 0.1
+      });
+
       const completion = await this.client.chat.completions.create({
         model: this.chatModel,
         messages,
@@ -137,8 +253,46 @@ export class OpenAIService {
         throw new Error('No response content from OpenAI');
       }
 
+      const duration = Date.now() - startTime;
+      logger.logPerformance('chat-completion', duration, {
+        model: this.chatModel,
+        inputTokens: completion.usage?.prompt_tokens,
+        outputTokens: completion.usage?.completion_tokens,
+        totalTokens: completion.usage?.total_tokens,
+        responseLength: response.length,
+        finishReason: completion.choices[0]?.finish_reason
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'chat-completion',
+        service: 'openai',
+        duration,
+        success: true,
+        metadata: {
+          model: this.chatModel,
+          totalTokens: completion.usage?.total_tokens,
+          responseLength: response.length
+        }
+      });
+
       return response.trim();
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('chat-completion-error', 'Failed to generate chat completion', error as Error, {
+        model: this.chatModel,
+        duration,
+        hasRAGContext: !!context.ragContext,
+        messageCount: context.recentMessages?.length || 0
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'chat-completion',
+        service: 'openai',
+        duration,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
       throw new ServiceError(
         'Failed to generate chat completion',
         'openai',
@@ -150,12 +304,20 @@ export class OpenAIService {
   }
 
   async generateSummary(messages: Message[]): Promise<string> {
+    const startTime = Date.now();
+    
     try {
       const conversationText = messages
         .map(msg => `${msg.role}: ${msg.text}`)
         .join('\n');
 
       const summaryPrompt = this.getSummaryPrompt();
+
+      logger.debug('summary-generation-start', 'Generating conversation summary', {
+        messageCount: messages.length,
+        conversationLength: conversationText.length,
+        model: this.chatModel
+      });
 
       const completion = await this.client.chat.completions.create({
         model: this.chatModel,
@@ -178,8 +340,46 @@ export class OpenAIService {
         throw new Error('No summary content from OpenAI');
       }
 
+      const duration = Date.now() - startTime;
+      logger.logPerformance('summary-generation', duration, {
+        model: this.chatModel,
+        inputMessages: messages.length,
+        inputLength: conversationText.length,
+        outputLength: summary.length,
+        inputTokens: completion.usage?.prompt_tokens,
+        outputTokens: completion.usage?.completion_tokens,
+        totalTokens: completion.usage?.total_tokens
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'summary-generation',
+        service: 'openai',
+        duration,
+        success: true,
+        metadata: {
+          messageCount: messages.length,
+          summaryLength: summary.length,
+          totalTokens: completion.usage?.total_tokens
+        }
+      });
+
       return summary.trim();
     } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('summary-generation-error', 'Failed to generate conversation summary', error as Error, {
+        messageCount: messages.length,
+        model: this.chatModel,
+        duration
+      });
+      
+      metricsService.recordPerformance({
+        operation: 'summary-generation',
+        service: 'openai',
+        duration,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
       throw new ServiceError(
         'Failed to generate conversation summary',
         'openai',
@@ -191,15 +391,39 @@ export class OpenAIService {
   }
 
   async healthCheck(): Promise<boolean> {
+    const startTime = Date.now();
+    
     try {
+      logger.debug('health-check', 'Starting OpenAI service health check', {
+        embeddingModel: this.embeddingModel
+      });
+      
       // Test with a simple embedding request
       await this.client.embeddings.create({
         model: this.embeddingModel,
         input: 'health check test',
         encoding_format: 'float'
       });
+      
+      const duration = Date.now() - startTime;
+      logger.logHealthCheck(
+        'health-check',
+        'openai-api',
+        'healthy',
+        duration
+      );
+      
       return true;
-    } catch {
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.logHealthCheck(
+        'health-check',
+        'openai-api',
+        'unhealthy',
+        duration,
+        error as Error
+      );
+      
       return false;
     }
   }

@@ -1,6 +1,6 @@
 import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
-import { appConfig } from '../config';
+// Removed unused appConfig import
 
 // Log levels and colors
 const logLevels = {
