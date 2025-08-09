@@ -5,10 +5,10 @@ import { LangChainService } from '../../src/services/langchain';
 import { TelegramService } from '../../src/services/telegram';
 import { FirestoreService } from '../../src/services/firestore';
 import { OpenAIService } from '../../src/services/openai';
-import { healthController } from '../../src/controllers/health';
-import { telegramController } from '../../src/controllers/telegram';
-import { ragController } from '../../src/controllers/rag';
-import { githubController } from '../../src/controllers/github';
+import { HealthController } from '../../src/controllers/health';
+import { TelegramController } from '../../src/controllers/telegram';
+import { RAGController } from '../../src/controllers/rag';
+import { GitHubController } from '../../src/controllers/github';
 import {
   TelegramContext,
   RAGSearchRequest,
@@ -46,12 +46,28 @@ describe('E2E Flow Tests', () => {
     // Create Express app with all controllers
     app = express();
     app.use(express.json());
-    
-    // Setup routes
-    app.use('/health', healthController);
-    app.use('/telegram', telegramController);
-    app.use('/rag', ragController);
-    app.use('/github', githubController);
+
+    // Setup routes using controller instances
+    const healthCtrl = new HealthController();
+    const healthRouter = express.Router();
+    healthRouter.get('/', (req, res) => healthCtrl.healthCheck(req, res));
+    app.use('/health', healthRouter);
+
+    const telegramCtrl = new TelegramController();
+    const telegramRouter = express.Router();
+    telegramRouter.post('/webhook', (req, res) => telegramCtrl.handleWebhook(req, res));
+    app.use('/telegram', telegramRouter);
+
+    const ragCtrl = new RAGController();
+    const ragRouter = express.Router();
+    ragRouter.post('/query', (req, res) => ragCtrl.processQuery(req, res));
+    ragRouter.post('/search', (req, res) => ragCtrl.performSearch(req, res));
+    app.use('/rag', ragRouter);
+
+    const githubCtrl = new GitHubController();
+    const githubRouter = express.Router();
+    githubRouter.post('/webhook', (req, res) => githubCtrl.handleWebhook(req, res));
+    app.use('/github', githubRouter);
   });
 
   beforeEach(() => {

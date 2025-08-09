@@ -116,7 +116,7 @@ export class LangChainService {
     }
 
     // 기본 LLM과 벡터스토어만 초기화 - 체인은 런타임에 구성
-    logger.info('RAG chain initialized (basic setup)');
+    logger.info('initialize-rag-chain', 'RAG chain initialized (basic setup)');
   }
 
   /**
@@ -128,7 +128,7 @@ export class LangChainService {
     }
 
     // 기본 설정만 완료 - 실제 대화 체인은 런타임에 구성
-    logger.info('Conversational RAG chain initialized (basic setup)');
+    logger.info('initialize-conversational-chain', 'Conversational RAG chain initialized (basic setup)');
   }
 
   /**
@@ -219,12 +219,11 @@ export class LangChainService {
         maxScore,
         hasEvidence,
         duration,
-        chatId: undefined,
         metadata: {
           searchType: 'similarity',
           minScoreThreshold: request.minScore || 0.80,
           topK: request.k || 6,
-          language: request.lang,
+          ...(request.lang ? { language: request.lang } : {}),
           totalCandidates: results.length,
           averageScore: Math.round(averageScore * 100) / 100,
           scoreDistribution,
@@ -259,12 +258,11 @@ export class LangChainService {
         maxScore: 0,
         hasEvidence: false,
         duration,
-        chatId: undefined,
         metadata: {
           searchType: 'similarity',
           minScoreThreshold: request.minScore || 0.80,
           topK: request.k || 6,
-          language: request.lang,
+          ...(request.lang ? { language: request.lang } : {}),
           totalCandidates: 0,
           averageScore: 0,
           scoreDistribution: { excellent: 0, good: 0, fair: 0, poor: 0 },
@@ -345,7 +343,7 @@ ${context}
         processingTime: 0,
       };
     } catch (error) {
-      logger.error('LangChain query failed:', error);
+      logger.error('rag-query', 'LangChain query failed', error as Error);
       throw error;
     }
   }
@@ -482,7 +480,6 @@ ${context}
         maxScore,
         hasEvidence: true,
         duration,
-        chatId: undefined,
         metadata: {
           searchType: 'conversational',
           minScoreThreshold: 0.80,
@@ -523,7 +520,6 @@ ${context}
         maxScore: 0,
         hasEvidence: false,
         duration,
-        chatId: undefined,
         metadata: {
           searchType: 'conversational',
           minScoreThreshold: 0.80,
@@ -565,7 +561,7 @@ ${conversationText}
       const result = await this.llm.invoke(summaryPrompt);
       return result.content as string;
     } catch (error) {
-      logger.error('Failed to summarize conversation:', error);
+      logger.error('summarize-conversation', 'Failed to summarize conversation', error as Error);
       throw error;
     }
   }
@@ -593,7 +589,7 @@ ${conversationText}
         conversationalChain: conversationalChainReady,
       };
     } catch (error) {
-      logger.error('LangChain health check failed:', error);
+      logger.error('health-check', 'LangChain health check failed', error as Error);
       return {
         status: 'unhealthy',
         vectorStore: false,
@@ -607,11 +603,7 @@ ${conversationText}
    * 리소스 정리
    */
   async cleanup(): Promise<void> {
-    try {
-      this.vectorStore = null;
-      logger.info('LangChain service cleaned up');
-    } catch (error) {
-      logger.error('Failed to cleanup LangChain service:', error);
-    }
+    this.vectorStore = null;
+    logger.info('cleanup', 'LangChain service cleaned up');
   }
 }

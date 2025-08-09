@@ -16,6 +16,7 @@ import {
   createMockLangChainService,
   createMockConversationService
 } from '../helpers/mockHelpers';
+import { Timestamp } from '@google-cloud/firestore';
 
 // Mock dependencies
 jest.mock('../../src/services/firestore');
@@ -296,7 +297,7 @@ describe('Regression Tests - 일관성 검증', () => {
       ];
 
       for (let i = 0; i < followUpQuestions.length; i++) {
-        const question = followUpQuestions[i];
+        const question = followUpQuestions[i]!;
         
         // 각 질문마다 적절한 맥락 기반 응답을 설정
         mockLangChainService.conversationalQuery.mockResolvedValueOnce({

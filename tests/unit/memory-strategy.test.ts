@@ -17,6 +17,17 @@ jest.mock('../../src/services/openai');
 jest.mock('../../src/services/langchain');
 jest.mock('../../src/services/logger');
 jest.mock('../../src/services/metrics');
+jest.mock('../../src/config', () => ({
+  appConfig: {
+    OPENAI_API_KEY: 'test',
+    QDRANT_API_KEY: 'test',
+    QDRANT_URL: 'http://localhost',
+    COLLECTION_NAME: 'test',
+    FIRESTORE_PROJECT_ID: 'test',
+    GITHUB_WEBHOOK_SECRET: 'secret',
+    TELEGRAM_BOT_TOKEN: 'token'
+  }
+}));
 
 describe('Memory Strategy Tests', () => {
   let conversationService: ConversationService;
@@ -846,7 +857,7 @@ describe('Memory Strategy Tests', () => {
       
       // 최근 메시지는 최소한만 포함되더라도 가장 최근 것들
       if (limitedMemoryContext.recentMessages.length > 0) {
-        expect(limitedMemoryContext.recentMessages[0].text).toContain('최근 중요 메시지');
+        expect(limitedMemoryContext.recentMessages[0]!.text).toContain('최근 중요 메시지');
       }
     });
   });
