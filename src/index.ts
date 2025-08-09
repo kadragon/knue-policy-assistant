@@ -13,7 +13,8 @@ import {
   generalRateLimit,
   webhookRateLimit,
   ragRateLimit,
-  healthRateLimit
+  healthRateLimit,
+  syncRateLimit
 } from './middleware/rate-limit';
 
 class App {
@@ -49,11 +50,30 @@ class App {
     // Parse URL-encoded bodies
     this.app.use(express.urlencoded({ extended: true }));
 
-    // Add CORS headers
+    // Security headers and CORS configuration
     this.app.use((req, res, next) => {
-      res.header('Access-Control-Allow-Origin', '*');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      // Security headers
+      res.header('X-Content-Type-Options', 'nosniff');
+      res.header('X-Frame-Options', 'DENY');
+      res.header('X-XSS-Protection', '1; mode=block');
+      res.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+      res.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+      
+      // Restrictive CORS - only allow specific origins in production
+      const allowedOrigins = appConfig.NODE_ENV === 'production' 
+        ? ['https://your-frontend-domain.com'] // Update with actual frontend domains
+        : ['http://localhost:3000', 'http://localhost:3001']; // Development origins
+      
+      const origin = req.headers.origin;
+      if (origin && allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+      } else if (appConfig.NODE_ENV === 'development') {
+        res.header('Access-Control-Allow-Origin', '*'); // Allow all in development
+      }
+      
+      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Correlation-ID');
+      res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
       
       if (req.method === 'OPTIONS') {
         res.sendStatus(200);
@@ -75,14 +95,14 @@ class App {
     this.app.post('/telegram/webhook', webhookRateLimit, this.telegramController.handleWebhook.bind(this.telegramController));
     
     // Phase 3: Conversation management API endpoints
-    this.app.get('/api/conversations/:chatId/stats', this.telegramController.getConversationStats.bind(this.telegramController));
-    this.app.post('/api/conversations/:chatId/force-summary', this.telegramController.forceSummary.bind(this.telegramController));
-    this.app.get('/api/conversations/:chatId/context', this.telegramController.getMemoryContext.bind(this.telegramController));
+    this.app.get('/api/conversations/:chatId/stats', generalRateLimit, this.telegramController.getConversationStats.bind(this.telegramController));
+    this.app.post('/api/conversations/:chatId/force-summary', generalRateLimit, this.telegramController.forceSummary.bind(this.telegramController));
+    this.app.get('/api/conversations/:chatId/context', generalRateLimit, this.telegramController.getMemoryContext.bind(this.telegramController));
 
     // Phase 4: GitHub webhook endpoints with rate limiting
     this.app.post('/github/webhook', webhookRateLimit, this.githubController.handleWebhook.bind(this.githubController));
-    this.app.post('/api/sync/manual', this.githubController.triggerManualSync.bind(this.githubController));
-    this.app.get('/api/sync/status', this.githubController.getSyncStatus.bind(this.githubController));
+    this.app.post('/api/sync/manual', syncRateLimit, this.githubController.triggerManualSync.bind(this.githubController));
+    this.app.get('/api/sync/status', generalRateLimit, this.githubController.getSyncStatus.bind(this.githubController));
 
     // Phase 4: RAG search endpoints with stricter rate limiting
     this.app.post('/api/rag/query', ragRateLimit, this.ragController.processQuery.bind(this.ragController));
