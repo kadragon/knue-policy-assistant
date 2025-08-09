@@ -3,14 +3,19 @@ import { LangChainService } from '../../src/services/langchain';
 import { FirestoreService } from '../../src/services/firestore';
 import { OpenAIService } from '../../src/services/openai';
 import {
-  RAGSearchRequest,
-  RAGQueryRequest,
   Conversation,
   Message,
-  Language,
-  DEFAULT_VALUES
+  Language
 } from '../../src/types';
-import { Timestamp } from '@google-cloud/firestore';
+import {
+  createMockTimestamp,
+  createMockConversation,
+  createMockMessage,
+  createMockFirestoreService,
+  createMockOpenAIService,
+  createMockLangChainService,
+  createMockConversationService
+} from '../helpers/mockHelpers';
 
 // Mock dependencies
 jest.mock('../../src/services/firestore');
@@ -144,21 +149,21 @@ describe('Regression Tests - 일관성 검증', () => {
         .mockResolvedValueOnce({
           answer: '연차휴가는 1년에 15일까지 사용할 수 있습니다.',
           sources: [{ title: '휴가 규정', filePath: 'policies/vacation.md', url: 'https://example.com/vacation.md' }],
-          question: similarQuestions[0],
+          question: similarQuestions[0] || '',
           lang: 'ko',
           processingTime: 1500
         })
         .mockResolvedValueOnce({
           answer: '연차휴가는 연간 15일까지 사용 가능합니다.',
           sources: [{ title: '휴가 규정', filePath: 'policies/vacation.md', url: 'https://example.com/vacation.md' }],
-          question: similarQuestions[1],
+          question: similarQuestions[1] || '',
           lang: 'ko',
           processingTime: 1450
         })
         .mockResolvedValueOnce({
           answer: '휴가 사용은 연 15일로 제한됩니다.',
           sources: [{ title: '휴가 규정', filePath: 'policies/vacation.md', url: 'https://example.com/vacation.md' }],
-          question: similarQuestions[2],
+          question: similarQuestions[2] || '',
           lang: 'ko',
           processingTime: 1550
         });
@@ -221,13 +226,13 @@ describe('Regression Tests - 일관성 검증', () => {
       expect(englishResponse.lang).toBe('en');
       expect(englishResponse.answer).toMatch(/^[A-Za-z0-9\s.,!?-]+$/); // 영어 문자만
       expect(englishResponse.answer).toContain('15 days');
-      expect(englishResponse.sources[0].title).toBe('Vacation Policy');
+      expect(englishResponse.sources[0]?.title).toBe('Vacation Policy');
 
       // 한국어 응답 검증
       expect(koreanResponse.lang).toBe('ko');
       expect(koreanResponse.answer).toMatch(/[\u3131-\u3163\uac00-\ud7a3]/); // 한글 포함
       expect(koreanResponse.answer).toContain('15일');
-      expect(koreanResponse.sources[0].title).toBe('휴가 규정');
+      expect(koreanResponse.sources[0]?.title).toBe('휴가 규정');
 
       // 두 응답 모두 핵심 정보(15일/15 days)를 포함해야 함
       expect(englishResponse.answer.toLowerCase()).toContain('15');

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
+import { Timestamp } from '@google-cloud/firestore';
 import { appConfig } from '../config';
 import { getServices } from '../services';
 import { ErrorUtils, DateUtils } from '../utils';
@@ -139,7 +140,7 @@ export class GitHubController {
             filesDeleted: job.filesDeleted,
             startedAt: job.startedAt?.toDate(),
             completedAt: job.completedAt?.toDate(),
-            errorMessage: job.errorMessage
+            errorMessage: job.error
           }))
         },
         timestamp: DateUtils.formatTimestamp()
@@ -304,12 +305,19 @@ export class GitHubController {
       // 동기화 작업 생성
       await services.firestore.createSyncJob({
         jobId,
-        type: 'webhook',
+        repoId: appConfig.REPO_ID,
+        type: 'webhook' as const,
         status: 'running',
         commit: commitSha,
+        filesAdded: 0,
+        filesModified: 0,
+        filesDeleted: 0,
         filesTotal: changedFiles.length,
         filesProcessed: 0,
-        startedAt: new Date()
+        chunksCreated: 0,
+        chunksUpdated: 0,
+        chunksDeleted: 0,
+        startedAt: Timestamp.now()
       });
 
       // 파일별 처리
@@ -329,7 +337,7 @@ export class GitHubController {
 
           // 진행상황 업데이트 (매 5개 파일마다)
           if (processedCount % 5 === 0 || processedCount === changedFiles.length) {
-            await services.firestore.updateSyncJobProgress(jobId, processedCount);
+            await services.firestore.updateSyncJobProgress(jobId, { filesProcessed: processedCount });
           }
 
         } catch (fileError) {
@@ -339,7 +347,11 @@ export class GitHubController {
       }
 
       // 작업 완료
-      await services.firestore.completeSyncJob(jobId, processedCount);
+      await services.firestore.completeSyncJob(jobId, { 
+        status: 'completed' as const,
+        filesProcessed: processedCount,
+        completedAt: Timestamp.now()
+      });
       console.log(`Sync job ${jobId} completed: ${processedCount}/${changedFiles.length} files processed`);
 
     } catch (error) {
@@ -361,19 +373,29 @@ export class GitHubController {
       // 동기화 작업 생성
       await services.firestore.createSyncJob({
         jobId,
-        type: 'full',
+        repoId: appConfig.REPO_ID,
+        type: 'manual' as const,
         status: 'running',
         branch,
+        filesAdded: 0,
+        filesModified: 0,
+        filesDeleted: 0,
         filesTotal: 0, // 초기에는 알 수 없음
         filesProcessed: 0,
-        startedAt: new Date()
+        chunksCreated: 0,
+        chunksUpdated: 0,
+        chunksDeleted: 0,
+        startedAt: Timestamp.now()
       });
 
       // 전체 레포지토리 스캔 및 동기화
       await services.github.performFullSync(branch, force);
 
       // 작업 완료 (실제 처리된 파일 수는 GitHub 서비스에서 업데이트)
-      await services.firestore.completeSyncJob(jobId);
+      await services.firestore.completeSyncJob(jobId, {
+        status: 'completed' as const,
+        completedAt: Timestamp.now()
+      });
       console.log(`Full sync job ${jobId} completed`);
 
     } catch (error) {

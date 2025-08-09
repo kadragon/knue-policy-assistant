@@ -59,9 +59,12 @@ export interface SyncJob {
   type: 'webhook' | 'polling' | 'manual';
   status: 'pending' | 'running' | 'completed' | 'failed';
   commit?: string;
+  branch?: string;
   filesAdded: number;
   filesModified: number;
   filesDeleted: number;
+  filesTotal?: number;
+  filesProcessed?: number;
   chunksCreated: number;
   chunksUpdated: number;
   chunksDeleted: number;

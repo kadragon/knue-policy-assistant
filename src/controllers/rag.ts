@@ -144,7 +144,7 @@ export class RAGController {
         chatId, 
         questionId,
         rating, // 1-5
-        comment,
+        comment: _comment,
         wasHelpful 
       } = req.body;
 
@@ -153,7 +153,7 @@ export class RAGController {
         return;
       }
 
-      const services = getServices();
+      const _services = getServices();
       
       // 피드백 데이터 저장 (saveFeedback 메서드 미구현으로 주석처리)
       // await services.firestore.saveFeedback({
@@ -259,7 +259,7 @@ export class RAGController {
       filePath: string;
       url?: string;
     }>,
-    userQuestion: string
+    _userQuestion: string
   ): string {
     const basePrompt = lang === 'en' 
       ? this.getEnglishSystemPrompt()
@@ -354,8 +354,8 @@ Response Format:
   /**
    * 근거 없음 응답 생성
    */
-  private generateNoEvidenceResponse(lang: Language): string {
-    if (lang === 'en') {
+  private generateNoEvidenceResponse(_lang: Language): string {
+    if (_lang === 'en') {
       return `❌ **Information Not Available**
 
 I apologize, but I cannot find relevant information in the KNUE regulations and guidelines for your question.
@@ -406,12 +406,12 @@ I apologize, but I cannot find relevant information in the KNUE regulations and 
       filePath: string;
       url?: string;
     }>,
-    lang: Language
+    _lang: Language
   ): string {
     // 출처 정보 생성
-    const sourceHeader = lang === 'en' ? '\n\n**📋 Sources:**' : '\n\n**📋 참고 자료:**';
+    const _sourceHeader = _lang === 'en' ? '\n\n**📋 Sources:**' : '\n\n**📋 참고 자료:**';
     
-    const sources = documents.slice(0, 3).map((doc, index) => {
+    const _sources = documents.slice(0, 3).map((doc, index) => {
       const title = doc.title || doc.filePath.split('/').pop()?.replace('.md', '') || 'Document';
       const link = doc.url ? `[${title}](${doc.url})` : title;
       return `${index + 1}. ${link}`;

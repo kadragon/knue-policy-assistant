@@ -404,12 +404,9 @@ export class FirestoreService {
       chunksCreated: data['chunksCreated'] || 0,
       chunksUpdated: data['chunksUpdated'] || 0,
       chunksDeleted: data['chunksDeleted'] || 0,
-      errorMessage: data['errorMessage'],
+      error: data['error'],
       startedAt: data['startedAt'],
-      completedAt: data['completedAt'],
-      failedAt: data['failedAt'],
-      createdAt: data['createdAt'],
-      updatedAt: data['updatedAt']
+      completedAt: data['completedAt']
     };
   }
 }

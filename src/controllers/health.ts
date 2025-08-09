@@ -385,7 +385,7 @@ export class HealthController {
   }
 
   // Placeholder metric collection methods
-  private async getConversationMetrics(services: any) {
+  private async getConversationMetrics(_services: any) {
     // TODO: Implement actual conversation metrics collection
     return {
       activeSessions: 0,
@@ -408,7 +408,7 @@ export class HealthController {
     };
   }
 
-  private async getRAGMetrics(services: any) {
+  private async getRAGMetrics(_services: any) {
     // TODO: Implement actual RAG metrics collection
     return {
       searchQueries: {

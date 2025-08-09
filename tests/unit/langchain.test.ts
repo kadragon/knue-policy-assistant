@@ -1,14 +1,18 @@
 import { LangChainService } from '../../src/services/langchain';
 import { QdrantVectorStore } from '@langchain/qdrant';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
+import { AIMessage } from '@langchain/core/messages';
 import {
-  RAGSearchRequest,
   RAGSearchResponse,
-  RAGQueryRequest,
   RAGQueryResponse,
   Message,
   Language
 } from '../../src/types';
+import {
+  createMockAIMessage,
+  createMockSearchResults,
+  createMockMessage
+} from '../helpers/mockHelpers';
 
 // Mock dependencies
 jest.mock('@langchain/openai');
@@ -295,23 +299,8 @@ describe('LangChainService', () => {
           lang: 'ko'
         };
 
-        const mockSearchResults: [any, number][] = [
-          [
-            {
-              pageContent: '연차휴가는 1년에 15일까지 사용할 수 있습니다.',
-              metadata: {
-                title: '휴가 규정',
-                filePath: 'policies/vacation.md',
-                url: 'https://example.com/vacation.md'
-              }
-            },
-            0.95
-          ]
-        ];
-
-        const mockLLMResponse = {
-          content: '연차휴가는 1년에 15일까지 사용할 수 있습니다. 출처: 휴가 규정'
-        };
+        const mockSearchResults = createMockSearchResults();
+        const mockLLMResponse = createMockAIMessage('연차휴가는 1년에 15일까지 사용할 수 있습니다. 출처: 휴가 규정');
 
         mockVectorStore.similaritySearchWithScore.mockResolvedValue(mockSearchResults);
         mockLLM.invoke.mockResolvedValue(mockLLMResponse);
@@ -440,9 +429,7 @@ describe('LangChainService', () => {
           ]
         ];
 
-        const mockLLMResponse = {
-          content: '병가는 연차와 별도로 연 30일까지 사용할 수 있습니다.'
-        };
+        const mockLLMResponse = createMockAIMessage('병가는 연차와 별도로 연 30일까지 사용할 수 있습니다.');
 
         mockVectorStore.similaritySearchWithScore.mockResolvedValue(mockSearchResults);
         mockLLM.invoke.mockResolvedValue(mockLLMResponse);
@@ -548,9 +535,7 @@ describe('LangChainService', () => {
           }
         ];
 
-        const mockSummaryResponse = {
-          content: '사용자가 휴가 규정에 대해 문의하였고, 연차휴가 15일 제한과 사전 승인 요구사항을 확인함.'
-        };
+        const mockSummaryResponse = createMockAIMessage('사용자가 휴가 규정에 대해 문의하였고, 연차휴가 15일 제한과 사전 승인 요구사항을 확인함.');
 
         mockLLM.invoke.mockResolvedValue(mockSummaryResponse);
 
@@ -573,9 +558,7 @@ describe('LangChainService', () => {
       it('빈 메시지 배열로 요약을 요청할 수 있어야 함', async () => {
         // Arrange
         const messages: Message[] = [];
-        const mockSummaryResponse = {
-          content: '대화 내용이 없습니다.'
-        };
+        const mockSummaryResponse = createMockAIMessage('대화 내용이 없습니다.');
 
         mockLLM.invoke.mockResolvedValue(mockSummaryResponse);
 

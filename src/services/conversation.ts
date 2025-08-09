@@ -9,7 +9,7 @@ import {
 import { ServiceError } from '../types';
 import { FirestoreService } from './firestore';
 import { OpenAIService } from './openai';
-import { DateUtils, TextUtils } from '../utils';
+import { TextUtils } from '../utils';
 import { createLogger } from './logger';
 import { metricsService } from './metrics';
 
@@ -285,7 +285,7 @@ export class ConversationService {
       return {
         conversation,
         recentMessages,
-        summary: conversation?.summary
+        ...(conversation?.summary && { summary: conversation.summary })
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -545,8 +545,8 @@ export class ConversationService {
       return {
         messageCount,
         hasSummary: !!conversation?.summary,
-        lastMessageAt: conversation?.lastMessageAt?.toDate(),
-        createdAt: conversation?.createdAt?.toDate()
+        ...(conversation?.lastMessageAt && { lastMessageAt: conversation.lastMessageAt.toDate() }),
+        ...(conversation?.createdAt && { createdAt: conversation.createdAt.toDate() })
       };
     } catch (error) {
       throw new ServiceError(
@@ -589,10 +589,11 @@ export class ConversationService {
 
       // 최근 메시지를 토큰 한도 내에서 선별
       const selectedMessages: Message[] = [];
-      const remainingTokens = maxTokens - tokenCount;
+      // const remainingTokens = maxTokens - tokenCount; // 향후 사용을 위해 남겨둠
 
       for (let i = context.recentMessages.length - 1; i >= 0; i--) {
         const message = context.recentMessages[i];
+        if (!message) continue;
         const messageTokens = this.openaiService.estimateTokens(message.text);
         
         if (tokenCount + messageTokens > maxTokens) {
@@ -632,11 +633,16 @@ export class ConversationService {
         }
       });
 
-      return {
-        summary,
+      const result: any = {
         recentMessages: selectedMessages,
         tokenCount
       };
+      
+      if (summary) {
+        result.summary = summary;
+      }
+      
+      return result;
     } catch (error) {
       const duration = Date.now() - startTime;
       logger.error('memory-context-build-error', `Failed to build memory context for ${chatId}`, error as Error, {
@@ -686,7 +692,7 @@ export class ConversationService {
       
       metricsService.recordConversation({
         chatId,
-        operation: 'force-summary',
+        operation: 'summary',
         messageCount: 0,
         duration,
         success: true
@@ -702,7 +708,7 @@ export class ConversationService {
       
       metricsService.recordConversation({
         chatId,
-        operation: 'force-summary',
+        operation: 'summary',
         messageCount: 0,
         duration,
         success: false

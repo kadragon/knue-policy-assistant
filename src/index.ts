@@ -9,7 +9,6 @@ import {
   errorLoggingMiddleware, 
   performanceMiddleware 
 } from './middleware/logging';
-import { globalLogger } from './services/logger';
 
 class App {
   private app: express.Application;

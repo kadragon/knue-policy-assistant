@@ -5,10 +5,7 @@ import { OpenAIService } from '../../src/services/openai';
 import {
   Conversation,
   Message,
-  RAGSearchRequest,
-  RAGQueryRequest,
-  ServiceError,
-  DEFAULT_VALUES
+  ServiceError
 } from '../../src/types';
 import { Timestamp } from '@google-cloud/firestore';
 

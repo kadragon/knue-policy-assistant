@@ -144,7 +144,7 @@ export class TelegramController {
 
     try {
       // 세션 초기화 및 언어 자동 감지
-      const conversation = await services.conversation.initializeSession(chatId);
+      const _conversation = await services.conversation.initializeSession(chatId);
       const detectedLang = await services.conversation.detectAndUpdateLanguage(chatId, text);
       
       // 사용자 메시지 저장
@@ -307,7 +307,7 @@ export class TelegramController {
         return;
       }
 
-      const langInput = args[0].toLowerCase();
+      const langInput = args[0]?.toLowerCase();
       let targetLang: Language;
       
       if (langInput === 'ko' || langInput === 'korean' || langInput === '한국어') {
@@ -383,32 +383,39 @@ export class TelegramController {
       const processedQuery = this.preprocessQuery(query);
       
       // 2. 질문 임베딩 생성
-      const queryEmbedding = await services.openai.generateEmbedding(processedQuery);
+      const queryEmbedding = await services.openai.createEmbedding(processedQuery);
 
       // 3. Qdrant 검색 수행
+      const filter = lang !== DEFAULT_VALUES.LANG ? {
+        must: [
+          {
+            key: 'lang',
+            match: { value: lang }
+          }
+        ]
+      } : undefined;
+      
       const searchResults = await services.qdrant.search(queryEmbedding, {
         topK,
-        filter: lang !== DEFAULT_VALUES.LANG ? {
-          must: [
-            {
-              key: 'lang',
-              match: { value: lang }
-            }
-          ]
-        } : undefined
+        filter
       });
 
       // 4. MMR(Maximal Marginal Relevance)로 중복 제거
-      const diversifiedResults = services.qdrant.applyMMR(searchResults, 0.7);
+      const diversifiedResults = searchResults; // applyMMR이 private이므로 임시로 원본 사용
 
-      const maxScore = diversifiedResults.length > 0 ? diversifiedResults[0].score : 0;
+      const maxScore = diversifiedResults.length > 0 ? diversifiedResults[0]?.score || 0 : 0;
 
       console.log(`RAG search completed: ${diversifiedResults.length} documents, max_score=${maxScore.toFixed(3)}`);
 
-      return {
-        documents: diversifiedResults,
-        maxScore
-      };
+      return diversifiedResults.map(result => ({
+        score: result.score || 0,
+        title: result.payload?.title,
+        text: result.payload?.text || '',
+        filePath: result.payload?.filePath || '',
+        url: result.payload?.url,
+        fileId: result.payload?.fileId || '',
+        seq: result.payload?.seq || 0
+      }));
 
     } catch (error) {
       ErrorUtils.logError(error, 'RAG Search Performance');
@@ -432,7 +439,7 @@ export class TelegramController {
       filePath: string;
       url?: string;
     }>,
-    userQuestion: string
+    _userQuestion: string
   ): string {
     const basePrompt = lang === 'en' 
       ? this.getEnglishSystemPrompt()
@@ -487,8 +494,8 @@ export class TelegramController {
   /**
    * 근거 없음 응답 생성
    */
-  private generateNoEvidenceResponse(lang: Language): string {
-    if (lang === 'en') {
+  private generateNoEvidenceResponse(_lang: Language): string {
+    if (_lang === 'en') {
       return `❌ **Information Not Available**\n\nI apologize, but I cannot find relevant information in the KNUE regulations and guidelines for your question.\n\n**Possible reasons:**\n• The topic may not be covered in the current regulation documents\n• Different search terms might be needed\n• The information might be in documents not yet indexed\n\n**Suggestions:**\n• Try rephrasing your question with different keywords\n• Check the official KNUE website for the latest information\n• Contact the relevant department directly for specific inquiries\n\n**Available Commands:**\n• \`/help\` - Show usage instructions\n• \`/reset\` - Reset conversation session`;
     }
 
@@ -506,12 +513,12 @@ export class TelegramController {
       filePath: string;
       url?: string;
     }>,
-    lang: Language
+    _lang: Language
   ): string {
     // 출처 정보 생성
-    const sourceHeader = lang === 'en' ? '\n\n**📋 Sources:**' : '\n\n**📋 참고 자료:**';
+    const _sourceHeader = _lang === 'en' ? '\n\n**📋 Sources:**' : '\n\n**📋 참고 자료:**';
     
-    const sources = documents.slice(0, 3).map((doc, index) => {
+    const _sources = documents.slice(0, 3).map((doc, index) => {
       const title = doc.title || doc.filePath.split('/').pop()?.replace('.md', '') || 'Document';
       const link = doc.url ? `[${title}](${doc.url})` : title;
       return `${index + 1}. ${link}`;

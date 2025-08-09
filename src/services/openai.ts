@@ -49,7 +49,7 @@ export class OpenAIService {
       });
 
       const duration = Date.now() - startTime;
-      const embedding = response.data[0].embedding;
+      const embedding = response.data[0]?.embedding;
       
       logger.logPerformance('embedding-create', duration, {
         model: this.embeddingModel,
@@ -446,6 +446,7 @@ export class OpenAIService {
     // Start from most recent messages and work backwards
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
+      if (!message) continue;
       const messageLength = message.text.length;
       
       if (totalChars + messageLength > maxChars) {
@@ -453,8 +454,12 @@ export class OpenAIService {
         const remainingChars = maxChars - totalChars;
         if (remainingChars > 100) { // Only include if we have meaningful space left
           result.unshift({
-            ...message,
-            text: message.text.substring(0, remainingChars - 10) + '...'
+            messageId: message.messageId || `msg_${Date.now()}`,
+            chatId: message.chatId || '',
+            role: message.role || 'user' as const,
+            text: message.text.substring(0, remainingChars - 10) + '...',
+            createdAt: message.createdAt,
+            metadata: message.metadata
           });
         }
         break;
