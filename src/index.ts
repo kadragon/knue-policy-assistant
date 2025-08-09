@@ -9,6 +9,12 @@ import {
   errorLoggingMiddleware, 
   performanceMiddleware 
 } from './middleware/logging';
+import {
+  generalRateLimit,
+  webhookRateLimit,
+  ragRateLimit,
+  healthRateLimit
+} from './middleware/rate-limit';
 
 class App {
   private app: express.Application;
@@ -34,6 +40,9 @@ class App {
     this.app.use(performanceMiddleware);
     this.app.use(requestLoggingMiddleware);
 
+    // Rate limiting middleware - applied globally as a baseline
+    this.app.use(generalRateLimit);
+
     // Parse JSON bodies
     this.app.use(express.json({ limit: '10mb' }));
     
@@ -56,29 +65,29 @@ class App {
   }
 
   private setupRoutes(): void {
-    // Phase 5: Enhanced health check endpoints
-    this.app.get('/healthz', this.healthController.healthCheck.bind(this.healthController));
-    this.app.get('/health', this.healthController.healthCheck.bind(this.healthController));
-    this.app.get('/health/detailed', this.healthController.detailedHealth.bind(this.healthController));
-    this.app.get('/health/metrics', this.healthController.systemMetrics.bind(this.healthController));
+    // Phase 5: Enhanced health check endpoints with rate limiting
+    this.app.get('/healthz', healthRateLimit, this.healthController.healthCheck.bind(this.healthController));
+    this.app.get('/health', healthRateLimit, this.healthController.healthCheck.bind(this.healthController));
+    this.app.get('/health/detailed', healthRateLimit, this.healthController.detailedHealth.bind(this.healthController));
+    this.app.get('/health/metrics', healthRateLimit, this.healthController.systemMetrics.bind(this.healthController));
 
-    // Phase 3: Telegram webhook endpoint
-    this.app.post('/telegram/webhook', this.telegramController.handleWebhook.bind(this.telegramController));
+    // Phase 3: Telegram webhook endpoint with rate limiting
+    this.app.post('/telegram/webhook', webhookRateLimit, this.telegramController.handleWebhook.bind(this.telegramController));
     
     // Phase 3: Conversation management API endpoints
     this.app.get('/api/conversations/:chatId/stats', this.telegramController.getConversationStats.bind(this.telegramController));
     this.app.post('/api/conversations/:chatId/force-summary', this.telegramController.forceSummary.bind(this.telegramController));
     this.app.get('/api/conversations/:chatId/context', this.telegramController.getMemoryContext.bind(this.telegramController));
 
-    // Phase 4: GitHub webhook endpoints
-    this.app.post('/github/webhook', this.githubController.handleWebhook.bind(this.githubController));
+    // Phase 4: GitHub webhook endpoints with rate limiting
+    this.app.post('/github/webhook', webhookRateLimit, this.githubController.handleWebhook.bind(this.githubController));
     this.app.post('/api/sync/manual', this.githubController.triggerManualSync.bind(this.githubController));
     this.app.get('/api/sync/status', this.githubController.getSyncStatus.bind(this.githubController));
 
-    // Phase 4: RAG search endpoints
-    this.app.post('/api/rag/query', this.ragController.processQuery.bind(this.ragController));
-    this.app.post('/api/rag/search', this.ragController.performSearch.bind(this.ragController));
-    this.app.post('/api/rag/feedback', this.ragController.collectFeedback.bind(this.ragController));
+    // Phase 4: RAG search endpoints with stricter rate limiting
+    this.app.post('/api/rag/query', ragRateLimit, this.ragController.processQuery.bind(this.ragController));
+    this.app.post('/api/rag/search', ragRateLimit, this.ragController.performSearch.bind(this.ragController));
+    this.app.post('/api/rag/feedback', ragRateLimit, this.ragController.collectFeedback.bind(this.ragController));
 
     // Phase 4: Polling worker (alternative to webhook)
     this.app.post('/worker/sync', (_req, res) => {

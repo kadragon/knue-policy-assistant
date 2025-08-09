@@ -603,11 +603,7 @@ ${conversationText}
    * 리소스 정리
    */
   async cleanup(): Promise<void> {
-    try {
-      this.vectorStore = null;
-      logger.info('cleanup', 'LangChain service cleaned up');
-    } catch (error) {
-      logger.error('cleanup-error', 'Failed to cleanup LangChain service', error as Error);
-    }
+    this.vectorStore = null;
+    logger.info('cleanup', 'LangChain service cleaned up');
   }
 }

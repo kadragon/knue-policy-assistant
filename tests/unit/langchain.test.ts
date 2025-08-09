@@ -1,21 +1,14 @@
-// @ts-nocheck
 import { LangChainService } from '../../src/services/langchain';
 import { QdrantVectorStore } from '@langchain/qdrant';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessageChunk } from '@langchain/core/messages';
+import { Document } from '@langchain/core/documents';
 import {
-  RAGSearchResponse,
-  RAGQueryResponse,
   RAGSearchRequest,
   RAGQueryRequest,
-  Message,
-  Language
+  Message
 } from '../../src/types';
-import {
-  createMockAIMessage,
-  createMockSearchResults,
-  createMockMessage
-} from '../helpers/mockHelpers';
+// Note: Using inline mock data instead of helper functions for better type safety
 
 // Mock dependencies
 jest.mock('@langchain/openai');
@@ -23,6 +16,10 @@ jest.mock('@langchain/qdrant');
 jest.mock('../../src/config');
 jest.mock('../../src/services/logger');
 jest.mock('../../src/services/metrics');
+
+// Helper function to create mock AIMessageChunk
+const createMockAIMessageChunk = (content: string): AIMessageChunk => 
+  new AIMessageChunk({ content });
 
 describe('LangChainService', () => {
   let langChainService: LangChainService;
@@ -136,9 +133,9 @@ describe('LangChainService', () => {
           lang: 'ko'
         };
 
-        const mockSearchResults: [any, number][] = [
+        const mockSearchResults: [Document, number][] = [
           [
-            {
+            new Document({
               pageContent: '휴가 규정 내용...',
               metadata: {
                 title: '휴가 규정',
@@ -147,11 +144,11 @@ describe('LangChainService', () => {
                 fileId: 'file123',
                 seq: 0
               }
-            },
+            }),
             0.92
           ],
           [
-            {
+            new Document({
               pageContent: '추가 휴가 내용...',
               metadata: {
                 title: '추가 휴가',
@@ -160,11 +157,11 @@ describe('LangChainService', () => {
                 fileId: 'file124',
                 seq: 1
               }
-            },
+            }),
             0.88
           ],
           [
-            {
+            new Document({
               pageContent: '관련성 낮은 내용...',
               metadata: {
                 title: '저점수 문서',
@@ -173,7 +170,7 @@ describe('LangChainService', () => {
                 fileId: 'file125',
                 seq: 0
               }
-            },
+            }),
             0.75 // 임계값보다 낮음
           ]
         ];
@@ -247,10 +244,10 @@ describe('LangChainService', () => {
           minScore: 0.90
         };
 
-        const mockSearchResults: [any, number][] = [
-          [{ pageContent: '높은 점수', metadata: { title: 'high', filePath: '', url: '', fileId: '', seq: 0 } }, 0.95],
-          [{ pageContent: '중간 점수', metadata: { title: 'medium', filePath: '', url: '', fileId: '', seq: 0 } }, 0.85],
-          [{ pageContent: '낮은 점수', metadata: { title: 'low', filePath: '', url: '', fileId: '', seq: 0 } }, 0.75]
+        const mockSearchResults: [Document, number][] = [
+          [new Document({ pageContent: '높은 점수', metadata: { title: 'high', filePath: '', url: '', fileId: '', seq: 0 } }), 0.95],
+          [new Document({ pageContent: '중간 점수', metadata: { title: 'medium', filePath: '', url: '', fileId: '', seq: 0 } }), 0.85],
+          [new Document({ pageContent: '낮은 점수', metadata: { title: 'low', filePath: '', url: '', fileId: '', seq: 0 } }), 0.75]
         ];
 
         mockVectorStore.similaritySearchWithScore.mockResolvedValue(mockSearchResults);
@@ -302,8 +299,22 @@ describe('LangChainService', () => {
           lang: 'ko'
         };
 
-        const mockSearchResults = createMockSearchResults();
-        const mockLLMResponse = createMockAIMessage('연차휴가는 1년에 15일까지 사용할 수 있습니다. 출처: 휴가 규정');
+        const mockSearchResults: [Document, number][] = [
+          [
+            new Document({
+              pageContent: '연차휴가는 1년에 15일까지 사용할 수 있습니다.',
+              metadata: {
+                title: '휴가 규정',
+                filePath: 'policies/vacation.md',
+                url: 'https://example.com/vacation.md',
+                fileId: 'file123',
+                seq: 0
+              }
+            }),
+            0.95
+          ]
+        ];
+        const mockLLMResponse = createMockAIMessageChunk('연차휴가는 1년에 15일까지 사용할 수 있습니다. 출처: 휴가 규정');
 
         mockVectorStore.similaritySearchWithScore.mockResolvedValue(mockSearchResults);
         mockLLM.invoke.mockResolvedValue(mockLLMResponse);
@@ -339,16 +350,16 @@ describe('LangChainService', () => {
           lang: 'ko'
         };
 
-        const mockSearchResults: [any, number][] = [
+        const mockSearchResults: [Document, number][] = [
           [
-            {
+            new Document({
               pageContent: '관련성 없는 내용',
               metadata: {
                 title: '무관한 문서',
                 filePath: 'unrelated.md',
                 url: 'https://example.com/unrelated.md'
               }
-            },
+            }),
             0.60 // 임계값 미만
           ]
         ];
@@ -418,21 +429,21 @@ describe('LangChainService', () => {
           }
         ];
 
-        const mockSearchResults: [any, number][] = [
+        const mockSearchResults: [Document, number][] = [
           [
-            {
+            new Document({
               pageContent: '병가는 별도로 연 30일까지 사용할 수 있습니다.',
               metadata: {
                 title: '병가 규정',
                 filePath: 'policies/sick-leave.md',
                 url: 'https://example.com/sick-leave.md'
               }
-            },
+            }),
             0.90
           ]
         ];
 
-        const mockLLMResponse = createMockAIMessage('병가는 연차와 별도로 연 30일까지 사용할 수 있습니다.');
+        const mockLLMResponse = createMockAIMessageChunk('병가는 연차와 별도로 연 30일까지 사용할 수 있습니다.');
 
         mockVectorStore.similaritySearchWithScore.mockResolvedValue(mockSearchResults);
         mockLLM.invoke.mockResolvedValue(mockLLMResponse);
@@ -538,7 +549,7 @@ describe('LangChainService', () => {
           }
         ];
 
-        const mockSummaryResponse = createMockAIMessage('사용자가 휴가 규정에 대해 문의하였고, 연차휴가 15일 제한과 사전 승인 요구사항을 확인함.');
+        const mockSummaryResponse = createMockAIMessageChunk('사용자가 휴가 규정에 대해 문의하였고, 연차휴가 15일 제한과 사전 승인 요구사항을 확인함.');
 
         mockLLM.invoke.mockResolvedValue(mockSummaryResponse);
 
@@ -561,7 +572,7 @@ describe('LangChainService', () => {
       it('빈 메시지 배열로 요약을 요청할 수 있어야 함', async () => {
         // Arrange
         const messages: Message[] = [];
-        const mockSummaryResponse = createMockAIMessage('대화 내용이 없습니다.');
+        const mockSummaryResponse = createMockAIMessageChunk('대화 내용이 없습니다.');
 
         mockLLM.invoke.mockResolvedValue(mockSummaryResponse);
 

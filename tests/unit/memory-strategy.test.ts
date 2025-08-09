@@ -857,10 +857,7 @@ describe('Memory Strategy Tests', () => {
       
       // 최근 메시지는 최소한만 포함되더라도 가장 최근 것들
       if (limitedMemoryContext.recentMessages.length > 0) {
-        const firstMessage = limitedMemoryContext.recentMessages[0];
-        if (firstMessage) {
-          expect(firstMessage.text).toContain('최근 중요 메시지');
-        }
+        expect(limitedMemoryContext.recentMessages[0]!.text).toContain('최근 중요 메시지');
       }
     });
   });
