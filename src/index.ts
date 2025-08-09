@@ -3,6 +3,13 @@ import { appConfig } from './config';
 import { getServices } from './services';
 import { HealthController, TelegramController, GitHubController, RAGController } from './controllers';
 import { ErrorUtils, DateUtils } from './utils';
+import { 
+  correlationIdMiddleware, 
+  requestLoggingMiddleware, 
+  errorLoggingMiddleware, 
+  performanceMiddleware 
+} from './middleware/logging';
+import { globalLogger } from './services/logger';
 
 class App {
   private app: express.Application;
@@ -23,23 +30,22 @@ class App {
   }
 
   private setupMiddleware(): void {
+    // Phase 5.2: Structured logging and monitoring middleware
+    this.app.use(correlationIdMiddleware);
+    this.app.use(performanceMiddleware);
+    this.app.use(requestLoggingMiddleware);
+
     // Parse JSON bodies
     this.app.use(express.json({ limit: '10mb' }));
     
     // Parse URL-encoded bodies
     this.app.use(express.urlencoded({ extended: true }));
 
-    // Add request logging
-    this.app.use((req, _res, next) => {
-      console.log(`${DateUtils.formatTimestamp()} - ${req.method} ${req.path}`);
-      next();
-    });
-
-    // Add CORS headers if needed
+    // Add CORS headers
     this.app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Correlation-ID');
       
       if (req.method === 'OPTIONS') {
         res.sendStatus(200);
@@ -128,8 +134,11 @@ class App {
         ...(isDevelopment && { stack: error.stack })
       };
 
-      res.status(500).json(errorResponse);
+      res.status(error.status || error.statusCode || 500).json(errorResponse);
     });
+
+    // Phase 5.2: Add structured error logging middleware
+    this.app.use(errorLoggingMiddleware);
   }
 
   async initialize(): Promise<void> {
